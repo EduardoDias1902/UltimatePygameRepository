@@ -34,10 +34,10 @@ def carregar_e_escalar(nome_arquivo, tamanho, cor_reserva):
         return surf
 
 # Imagens Jogador
-img_parado = carregar_e_escalar("parado.png", (LARGURA_BASE, ALTURA_BASE), (200, 200, 200))
-img_correndo = carregar_e_escalar("correndo.png", (int(LARGURA_BASE * 1.1), int(ALTURA_BASE * 1.1)), (180, 180, 180))
-img_pulando = carregar_e_escalar("pulando.png", (LARGURA_BASE, ALTURA_BASE), (220, 220, 220))
-img_agachado = carregar_e_escalar("agachado.png", TAM_AGACHADO, (100, 100, 100))
+img_parado = carregar_e_escalar("EminemJumps/parado.png", (LARGURA_BASE, ALTURA_BASE), (200, 200, 200))
+img_correndo = carregar_e_escalar("EminemJumps/correndo.png", (int(LARGURA_BASE * 1.1), int(ALTURA_BASE * 1.1)), (180, 180, 180))
+img_pulando = carregar_e_escalar("EminemJumps/pulando.png", (LARGURA_BASE, ALTURA_BASE), (220, 220, 220))
+img_agachado = carregar_e_escalar("EminemJumps/agachado.png", TAM_AGACHADO, (100, 100, 100))
 
 # Variáveis Jogador
 player_x = LARGURA // 2
