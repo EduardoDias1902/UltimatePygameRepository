@@ -1,4 +1,4 @@
-BD_POKEMON = [
+BD_POKEMON= [
     {"id": 1, "nome": "Bulbasaur", "tipo1": "Planta", "tipo2": "Veneno", "cor": ["Verde"], "habitat": "Campo", "altura": 0.7, "peso": 6.9},
     {"id": 2, "nome": "Ivysaur", "tipo1": "Planta", "tipo2": "Veneno", "cor": ["Verde"], "habitat": "Campo", "altura": 1.0, "peso": 13.0},
     {"id": 3, "nome": "Venusaur", "tipo1": "Planta", "tipo2": "Veneno", "cor": ["Verde"], "habitat": "Campo", "altura": 2.0, "peso": 100.0},
