@@ -68,6 +68,8 @@ class World:
     def cell(self, gx: int, gy: int) -> str:
         if not self.in_bounds(gx, gy):
             return "#"
+        if gx >= len(self.grid[gy]):
+            return "#"
         return self.grid[gy][gx]
 
     def is_wall(self, gx: int, gy: int) -> bool:
@@ -228,35 +230,73 @@ class Game:
         
         self.tex_wall, self.tex_enemy_frames, self.tex_boss_frames, self.tex_death_frames, self.tex_medkit, self.tex_weapon_idle, self.tex_weapon_shoot = generate_textures()
 
-        self.world = World([
-            "########################",
-            "#......#...............#",
-            "#..##..#..##...#####...#",
-            "#......#.......#.......#",
-            "#..#.......#...#..###..#",
-            "#..#..###..#...#.......#",
-            "#..#.......#...#####...#",
-            "#......#...........#...#",
-            "########..##########...#",
-            "#......................#",
-            "#......#.......#.......#",
-            "########################",
-        ])
+        self.maps = [
+            [
+                "########################",
+                "#......#...............#",
+                "#..##..#..##...#####...#",
+                "#......#.......#.......#",
+                "#..#.......#...#..###..#",
+                "#..#..###..#...#.......#",
+                "#..#.......#...#####...#",
+                "#......#...........#...#",
+                "########..##########...#",
+                "#......................#",
+                "#......#.......#.......#",
+                "########################",
+            ],
+            [
+                "########################",
+                "#......................#",
+                "#..#.#..#.#..#.#..#.#..#",
+                "#......................#",
+                "#..#.#..##....##..#.#..#",
+                "#..#.#..#......#..#.#..#",
+                "#.......#......#.......#",
+                "#..#.#..##....##..#.#..#",
+                "#......................#",
+                "#..#.#..#.#..#.#..#.#..#",
+                "#......................#",
+                "########################",
+            ],
+            [
+                "########################",
+                "#......................#",
+                "#.####################.#",
+                "#.#..................#.#",
+                "#.#.################.#.#",
+                "#.#.#..............#.#.#",
+                "#.#.#.############.#.#.#",
+                "#.#.#................#.#",
+                "#.#.##################.#",
+                "#.#....................#",
+                "#..####################.",
+                "########################",
+            ],
+            [
+                "########################",
+                "#..........##..........#",
+                "#..........##..........#",
+                "####..############..####",
+                "#..........##..........#",
+                "#..........##..........#",
+                "#..###..########..###..#",
+                "#..###..########..###..#",
+                "#..........##..........#",
+                "####..############..####",
+                "#..........##..........#",
+                "########################",
+            ]
+        ]
+        self.map_idx = 0
+        self.world = World(self.maps[self.map_idx])
 
-        self.player = Player(x=2.5, y=2.5, ang=0.0)
+        self.player = Player(x=1.5, y=1.5, ang=0.0)
         self.player_radius = 0.2
         self.enemies: list[Enemy] = []
         self.particles: list[Particle] = []
         self.items: list[HealthItem] = []
-        
-        free_spots = []
-        for gy in range(self.world.h):
-            for gx in range(self.world.w):
-                if not self.world.is_wall(gx, gy):
-                    free_spots.append((gx + 0.5, gy + 0.5))
-        for _ in range(4):
-            spot = random.choice(free_spots)
-            self.items.append(HealthItem(spot[0], spot[1]))
+        self._respawn_items()
         
         self.level = 0
         self.level_msg_timer = 0.0
@@ -275,8 +315,31 @@ class Game:
 
         self._setup_mouse()
 
+    def _respawn_items(self):
+        self.items = []
+        free_spots = []
+        for gy in range(self.world.h):
+            for gx in range(self.world.w):
+                if not self.world.is_wall(gx, gy):
+                    # Avoid spawning where player is
+                    if math.hypot(gx+0.5 - self.player.x, gy+0.5 - self.player.y) > 2.0:
+                        free_spots.append((gx + 0.5, gy + 0.5))
+        if not free_spots: return
+        for _ in range(4):
+            spot = random.choice(free_spots)
+            self.items.append(HealthItem(spot[0], spot[1]))
+
     def _next_level(self):
         self.level += 1
+        
+        # Change map after boss level (when moving into level 6, 11, etc)
+        if self.level > 1 and (self.level - 1) % 5 == 0:
+            self.map_idx = (self.map_idx + 1) % len(self.maps)
+            self.world = World(self.maps[self.map_idx])
+            # Reset player to safe spot in new map
+            self.player.x, self.player.y = 1.5, 1.5
+            self._respawn_items()
+
         self.player.hp = min(150, self.player.hp + 50)
         self.player.ammo += 100
         self.enemies = []
