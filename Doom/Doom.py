@@ -1,27 +1,19 @@
 import math
 import random
 import sys
+import os
 from dataclasses import dataclass
 
 import pygame
 
-
-# Um "Doom-like" em Pygame (raycasting 2.5D).
-# Não replica o DOOM original (assets/licenças/código), mas entrega mecânicas parecidas.
-
-
 def clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
 
-
 def wrap_angle(a: float) -> float:
-    a = (a + math.pi) % (2 * math.pi) - math.pi
-    return a
-
+    return (a + math.pi) % (2 * math.pi) - math.pi
 
 def lerp(a: float, b: float, t: float) -> float:
     return a + (b - a) * t
-
 
 @dataclass
 class Player:
@@ -30,20 +22,39 @@ class Player:
     ang: float
     hp: int = 100
     ammo: int = 50
-
-    move_speed: float = 3.0
+    move_speed: float = 2.8
     rot_speed: float = 2.4
-
 
 @dataclass
 class Enemy:
     x: float
     y: float
     hp: int = 40
+    max_hp: int = 40
     alive: bool = True
     cooldown: float = 0.0
-    state: str = "idle"  # idle/chase
+    state: str = "idle"
+    is_boss: bool = False
+    scale: float = 1.0
+    anim_timer: float = 0.0
+    frame: int = 0
 
+@dataclass
+class Particle:
+    x: float
+    y: float
+    z: float
+    vx: float
+    vy: float
+    vz: float
+    life: float
+
+@dataclass
+class HealthItem:
+    x: float
+    y: float
+    active: bool = True
+    timer: float = 0.0
 
 class World:
     def __init__(self, grid: list[str]) -> None:
@@ -60,16 +71,13 @@ class World:
         return self.grid[gy][gx]
 
     def is_wall(self, gx: int, gy: int) -> bool:
-        return self.cell(gx, gy) == "#"
+        return self.cell(gx, gy) != "."
 
     def is_blocked(self, x: float, y: float) -> bool:
         return self.is_wall(int(x), int(y))
 
-
 def try_move(world: World, x: float, y: float, nx: float, ny: float, radius: float) -> tuple[float, float]:
-    # Colisão simples em círculo vs grid (separa eixos)
     def blocked(px: float, py: float) -> bool:
-        # amostra 4 pontos do círculo
         for ox, oy in ((-radius, 0), (radius, 0), (0, -radius), (0, radius)):
             if world.is_blocked(px + ox, py + oy):
                 return True
@@ -82,15 +90,11 @@ def try_move(world: World, x: float, y: float, nx: float, ny: float, radius: flo
         ty = ny
     return tx, ty
 
-
 def cast_ray_dda(world: World, ox: float, oy: float, ang: float, max_dist: float = 30.0) -> tuple[float, int, int, int]:
-    # DDA clássico: retorna distância, célula atingida, e "side" (0 x-step, 1 y-step)
     dx = math.cos(ang)
     dy = math.sin(ang)
-
     map_x = int(ox)
     map_y = int(oy)
-
     delta_dist_x = abs(1.0 / dx) if dx != 0 else 1e30
     delta_dist_y = abs(1.0 / dy) if dy != 0 else 1e30
 
@@ -128,438 +132,522 @@ def cast_ray_dda(world: World, ox: float, oy: float, ang: float, max_dist: float
 
     return max_dist, map_x, map_y, side
 
-
 def line_of_sight(world: World, x0: float, y0: float, x1: float, y1: float) -> bool:
-    # Ray march simples (passo pequeno)
     dx = x1 - x0
     dy = y1 - y0
     dist = math.hypot(dx, dy)
     if dist < 1e-6:
         return True
-    steps = int(dist * 12)
+    steps = max(1, int(dist * 12))
     for i in range(steps + 1):
         t = i / steps
-        x = x0 + dx * t
-        y = y0 + dy * t
-        if world.is_blocked(x, y):
+        if world.is_blocked(x0 + dx * t, y0 + dy * t):
             return False
     return True
 
+def load_gif(filepath) -> list[pygame.Surface]:
+    frames = []
+    try:
+        from PIL import Image
+        img = Image.open(filepath)
+        for frame in range(getattr(img, "n_frames", 1)):
+            img.seek(frame)
+            rgba = img.convert("RGBA")
+            data = rgba.tobytes()
+            surf = pygame.image.fromstring(data, rgba.size, "RGBA")
+            frames.append(surf)
+    except Exception as e:
+        print("PIL exception on GIF:", e)
+    return frames
+
+def generate_textures():
+    wall_tex = pygame.Surface((64, 64))
+    for y in range(64):
+        for x in range(64):
+            c = random.randint(80, 140)
+            wall_tex.set_at((x, y), (c, c//2, c//3))
+    for y in range(0, 64, 16):
+        pygame.draw.line(wall_tex, (0,0,0), (0, y), (64, y), 2)
+    for y in range(0, 64, 32):
+        for x in range(0, 64, 16):
+            pygame.draw.line(wall_tex, (0,0,0), (x, y), (x, y+16), 2)
+        for x in range(8, 64, 16):
+            pygame.draw.line(wall_tex, (0,0,0), (x, y+16), (x, y+32), 2)
+
+    enemy_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
+    pygame.draw.circle(enemy_tex, (200, 30, 40), (32, 28), 24)
+    pygame.draw.circle(enemy_tex, (40, 0, 0), (22, 22), 6)
+    pygame.draw.circle(enemy_tex, (40, 0, 0), (42, 22), 6)
+    pygame.draw.circle(enemy_tex, (255, 200, 0), (22, 22), 2)
+    pygame.draw.circle(enemy_tex, (255, 200, 0), (42, 22), 2)
+    pygame.draw.rect(enemy_tex, (255, 255, 255), (20, 40, 24, 8), border_radius=2)
+
+    gif_path = os.path.join(os.path.dirname(__file__), "images", "skeleton.gif")
+    tex_enemy_frames = load_gif(gif_path)
+    if not tex_enemy_frames: tex_enemy_frames = [enemy_tex]
+
+    gif_boss = os.path.join(os.path.dirname(__file__), "images", "BOSS.gif")
+    tex_boss_frames = load_gif(gif_boss)
+    if not tex_boss_frames: tex_boss_frames = [enemy_tex]
+
+    gif_death = os.path.join(os.path.dirname(__file__), "images", "Death.gif")
+    tex_death_frames = load_gif(gif_death)
+    if not tex_death_frames: tex_death_frames = [enemy_tex]
+
+    medkit_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
+    pygame.draw.rect(medkit_tex, (220, 220, 220), (16, 24, 32, 24), border_radius=4)
+    pygame.draw.rect(medkit_tex, (200, 30, 30), (28, 28, 8, 16))
+    pygame.draw.rect(medkit_tex, (200, 30, 30), (24, 32, 16, 8))
+    pygame.draw.rect(medkit_tex, (100, 100, 100), (24, 18, 16, 6))
+
+    idle_path = os.path.join(os.path.dirname(__file__), "images", "pistolIdle.png")
+    shoot_path = os.path.join(os.path.dirname(__file__), "images", "pistolShooting.png")
+    try:
+        tex_weapon_idle = pygame.image.load(idle_path).convert_alpha()
+        tex_weapon_shoot = pygame.image.load(shoot_path).convert_alpha()
+    except Exception as e:
+        print("Failed to load weapon PNGs:", e)
+        tex_weapon_idle = pygame.Surface((240, 240), pygame.SRCALPHA)
+        tex_weapon_shoot = pygame.Surface((240, 240), pygame.SRCALPHA)
+
+    return wall_tex, tex_enemy_frames, tex_boss_frames, tex_death_frames, medkit_tex, tex_weapon_idle, tex_weapon_shoot
 
 class Game:
     def __init__(self) -> None:
         pygame.init()
-        pygame.display.set_caption("Doom-like (Pygame)")
+        pygame.display.set_caption("Doom Pygame 2.5D")
 
         self.W, self.H = 960, 540
         self.screen = pygame.display.set_mode((self.W, self.H))
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", 18)
+        self.big_font = pygame.font.SysFont("consolas", 48, bold=True)
 
-        self.render_scale = 1  # aumente para 2 em PCs lentos (reduz colunas)
+        self.render_scale = 2 
         self.fov = math.radians(66)
+        
+        self.tex_wall, self.tex_enemy_frames, self.tex_boss_frames, self.tex_death_frames, self.tex_medkit, self.tex_weapon_idle, self.tex_weapon_shoot = generate_textures()
 
-        self.world = World(
-            [
-                "################",
-                "#......#.......#",
-                "#..##..#..##...#",
-                "#......#.......#",
-                "#..#.......#...#",
-                "#..#..###..#...#",
-                "#..#.......#...#",
-                "#......#.......#",
-                "#..##..#..##...#",
-                "#......#.......#",
-                "#......#.......#",
-                "################",
-            ]
-        )
+        self.world = World([
+            "########################",
+            "#......#...............#",
+            "#..##..#..##...#####...#",
+            "#......#.......#.......#",
+            "#..#.......#...#..###..#",
+            "#..#..###..#...#.......#",
+            "#..#.......#...#####...#",
+            "#......#...........#...#",
+            "########..##########...#",
+            "#......................#",
+            "#......#.......#.......#",
+            "########################",
+        ])
 
         self.player = Player(x=2.5, y=2.5, ang=0.0)
-        self.player_radius = 0.18
-
-        self.enemies: list[Enemy] = [
-            Enemy(10.5, 2.5, hp=50),
-            Enemy(12.5, 8.5, hp=60),
-            Enemy(6.5, 9.5, hp=40),
-        ]
+        self.player_radius = 0.2
+        self.enemies: list[Enemy] = []
+        self.particles: list[Particle] = []
+        self.items: list[HealthItem] = []
+        
+        free_spots = []
+        for gy in range(self.world.h):
+            for gx in range(self.world.w):
+                if not self.world.is_wall(gx, gy):
+                    free_spots.append((gx + 0.5, gy + 0.5))
+        for _ in range(4):
+            spot = random.choice(free_spots)
+            self.items.append(HealthItem(spot[0], spot[1]))
+        
+        self.level = 0
+        self.level_msg_timer = 0.0
 
         self.shake = 0.0
         self.weapon_t = 0.0
         self.firing = False
         self.fire_flash = 0.0
         self.hit_marker = 0.0
-
         self.mouse_look = True
+        self.heal_flash = 0.0
+        self.moving_right = False
+        
+        self._next_level()
+        self.level_msg_timer = 0.0
+
         self._setup_mouse()
 
-    def _setup_mouse(self) -> None:
+    def _next_level(self):
+        self.level += 1
+        self.player.hp = min(150, self.player.hp + 50)
+        self.player.ammo += 100
+        self.enemies = []
+        self.level_msg_timer = 3.0
+        
+        free_spots = []
+        for gy in range(self.world.h):
+            for gx in range(self.world.w):
+                if not self.world.is_wall(gx, gy):
+                    if math.hypot(gx + 0.5 - self.player.x, gy + 0.5 - self.player.y) > 3.0:
+                        free_spots.append((gx + 0.5, gy + 0.5))
+        
+        if self.level % 5 == 0:
+            if free_spots:
+                spot = random.choice(free_spots)
+                prev_lvl = max(1, self.level - 1)
+                prev_num_enemies = 4 + prev_lvl * 2
+                prev_hp_val = 20 + prev_lvl * 20
+                hp_val = int(3 * (prev_num_enemies * prev_hp_val))
+                self.enemies.append(Enemy(spot[0], spot[1], hp=hp_val, max_hp=hp_val, is_boss=True, scale=3.8))
+        else:
+            num_enemies = 4 + self.level * 2
+            for _ in range(num_enemies):
+                if not free_spots: break
+                spot = random.choice(free_spots)
+                hp_val = 20 + self.level * 20
+                self.enemies.append(Enemy(spot[0], spot[1], hp=hp_val, max_hp=hp_val))
+
+    def _setup_mouse(self):
         pygame.event.set_grab(self.mouse_look)
         pygame.mouse.set_visible(not self.mouse_look)
         pygame.mouse.get_rel()
 
-    def toggle_mouse(self) -> None:
+    def toggle_mouse(self):
         self.mouse_look = not self.mouse_look
         self._setup_mouse()
 
-    def run(self) -> None:
+    def run(self):
         while True:
             dt = self.clock.tick(60) / 1000.0
             self._handle_events()
             self._update(dt)
             self._render()
 
-    def _handle_events(self) -> None:
+    def _handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
                 sys.exit()
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    pygame.quit()
-                    sys.exit()
-                if event.key == pygame.K_TAB:
-                    self.toggle_mouse()
-                if event.key == pygame.K_r:
-                    # recarrega "clip" simples
-                    self.player.ammo = min(200, self.player.ammo + 25)
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:
-                    self._fire()
+                if event.key == pygame.K_ESCAPE: sys.exit()
+                if event.key == pygame.K_TAB: self.toggle_mouse()
+                if event.key == pygame.K_r: self.player.ammo = min(200, self.player.ammo + 25)
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                self._fire()
 
-    def _update(self, dt: float) -> None:
+    def _update(self, dt: float):
         keys = pygame.key.get_pressed()
+
+        self.level_msg_timer = max(0.0, self.level_msg_timer - dt)
+
+        alive_count = sum(1 for e in self.enemies if e.state != "dying" and e.alive)
+        if alive_count == 0 and self.player.hp > 0:
+            self._next_level()
 
         if self.mouse_look:
             mx, _ = pygame.mouse.get_rel()
-            self.player.ang = wrap_angle(self.player.ang + (-mx) * 0.0022)
+            self.player.ang = wrap_angle(self.player.ang + mx * 0.0022)
         else:
-            rot = 0.0
-            if keys[pygame.K_LEFT]:
-                rot += 1.0
-            if keys[pygame.K_RIGHT]:
-                rot -= 1.0
+            rot = (1.0 if keys[pygame.K_LEFT] else 0) - (1.0 if keys[pygame.K_RIGHT] else 0)
             self.player.ang = wrap_angle(self.player.ang + rot * self.player.rot_speed * dt)
 
-        move = pygame.Vector2(0, 0)
-        forward = pygame.Vector2(math.cos(self.player.ang), math.sin(self.player.ang))
-        right = pygame.Vector2(forward.y, -forward.x)
-        if keys[pygame.K_w]:
-            move += forward
-        if keys[pygame.K_s]:
-            move -= forward
-        if keys[pygame.K_d]:
-            move += right
-        if keys[pygame.K_a]:
-            move -= right
+        move = pygame.Vector2()
+        fw = pygame.Vector2(math.cos(self.player.ang), math.sin(self.player.ang))
+        rt = pygame.Vector2(fw.y, -fw.x)
+        if keys[pygame.K_w]: move += fw
+        if keys[pygame.K_s]: move -= fw
+        self.moving_right = bool(keys[pygame.K_d])
+        if self.moving_right: move -= rt
+        if keys[pygame.K_a]: move += rt
 
         speed = self.player.move_speed
-        if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]:
-            speed *= 1.35
+        if keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]: speed *= 1.4
 
         if move.length_squared() > 0:
             move = move.normalize() * speed * dt
-            nx = self.player.x + move.x
-            ny = self.player.y + move.y
-            self.player.x, self.player.y = try_move(
-                self.world, self.player.x, self.player.y, nx, ny, self.player_radius
-            )
+            self.player.x, self.player.y = try_move(self.world, self.player.x, self.player.y, self.player.x + move.x, self.player.y + move.y, self.player_radius)
 
-        # timers
         self.weapon_t += dt * (6.0 if move.length_squared() > 0 else 2.0)
         self.shake = max(0.0, self.shake - dt * 6.0)
-        self.fire_flash = max(0.0, self.fire_flash - dt * 10.0)
+        self.fire_flash = max(0.0, self.fire_flash - dt * 3.5)
         self.hit_marker = max(0.0, self.hit_marker - dt * 8.0)
+        self.heal_flash = max(0.0, self.heal_flash - dt * 3.0)
 
-        # inimigos
-        for e in self.enemies:
-            if not e.alive:
-                continue
-            e.cooldown = max(0.0, e.cooldown - dt)
-
-            dx = self.player.x - e.x
-            dy = self.player.y - e.y
-            dist = math.hypot(dx, dy)
-
-            if dist < 9.5 and line_of_sight(self.world, e.x, e.y, self.player.x, self.player.y):
-                e.state = "chase"
-            elif dist > 12.0:
-                e.state = "idle"
-
-            if e.state == "chase":
-                # anda em direção ao player
-                if dist > 1.2:
-                    vx = dx / (dist + 1e-6)
-                    vy = dy / (dist + 1e-6)
-                    step = 1.6 * dt
-                    nx = e.x + vx * step
-                    ny = e.y + vy * step
-                    if not self.world.is_blocked(nx, ny):
-                        e.x, e.y = nx, ny
-
-                # atira se perto e com cooldown
-                if dist < 6.5 and e.cooldown <= 0.0:
-                    e.cooldown = random.uniform(0.7, 1.3)
-                    if random.random() < 0.55:
-                        self.player.hp = max(0, self.player.hp - random.randint(3, 8))
-                        self.shake = min(1.0, self.shake + 0.55)
-
-        if self.player.hp <= 0:
-            self._respawn()
-
-    def _respawn(self) -> None:
-        self.player.x, self.player.y, self.player.ang = 2.5, 2.5, 0.0
-        self.player.hp = 100
-        self.player.ammo = 50
-        for i, e in enumerate(self.enemies):
-            e.alive = True
-            e.hp = 40 + i * 10
-            e.cooldown = 0.0
-            e.state = "idle"
-        self.shake = 0.0
-        self.fire_flash = 0.0
-        self.hit_marker = 0.0
-
-    def _fire(self) -> None:
-        if self.player.ammo <= 0:
-            self.shake = min(1.0, self.shake + 0.15)
-            return
-
-        self.player.ammo -= 1
-        self.fire_flash = 1.0
-        self.shake = min(1.0, self.shake + 0.35)
-
-        # hitscan: pega inimigo mais próximo dentro de um cone pequeno
-        best = None
-        best_dist = 1e9
-        cone = math.radians(2.6)
+        for p in self.particles[:]:
+            p.x += p.vx * dt
+            p.y += p.vy * dt
+            p.z += p.vz * dt
+            p.vz += 9.8 * dt
+            p.life -= dt
+            if p.life <= 0 or p.z > 0.5:
+                self.particles.remove(p)
 
         px, py = self.player.x, self.player.y
-        for e in self.enemies:
-            if not e.alive:
-                continue
-            dx = e.x - px
-            dy = e.y - py
-            dist = math.hypot(dx, dy)
-            if dist < 0.25:
-                continue
-            ang_to = math.atan2(dy, dx)
-            da = abs(wrap_angle(ang_to - self.player.ang))
-            if da <= cone and dist < best_dist:
-                if line_of_sight(self.world, px, py, e.x, e.y):
-                    best = e
-                    best_dist = dist
+        
+        for it in self.items:
+            if not it.active:
+                it.timer -= dt
+                if it.timer <= 0: it.active = True
+            else:
+                if math.hypot(it.x - px, it.y - py) < 0.6 and self.player.hp < 150:
+                    self.player.hp = min(150, self.player.hp + 30)
+                    it.active = False
+                    it.timer = 20.0
+                    self.heal_flash = 1.0 
 
-        if best is not None:
-            dmg = random.randint(12, 22)
+        for e in self.enemies:
+            if not e.alive: continue
+            
+            if e.state == "dying":
+                e.anim_timer += dt
+                if e.anim_timer > 0.015: # Accelerated Death animation
+                    e.anim_timer = 0.0
+                    e.frame += 1
+                    if e.frame >= len(self.tex_death_frames):
+                        e.alive = False
+                continue
+
+            e.cooldown = max(0.0, e.cooldown - dt)
+            dx, dy = px - e.x, py - e.y
+            dist = math.hypot(dx, dy)
+
+            if dist < 12.0 and line_of_sight(self.world, e.x, e.y, px, py):
+                e.state = "chase"
+            elif dist > 15.0:
+                e.state = "idle"
+
+            if e.state == "chase" and dist > 1.2:
+                e.anim_timer += dt
+                if e.is_boss:
+                    if e.anim_timer > 0.02: # Extremely fast BOSS animation
+                        e.anim_timer = 0.0
+                        e.frame = (e.frame + 1) % max(1, len(self.tex_boss_frames))
+                else:
+                    if e.anim_timer > 0.12: # Normal skeleton animation
+                        e.anim_timer = 0.0
+                        e.frame = (e.frame + 1) % max(1, len(self.tex_enemy_frames))
+
+                vx, vy = dx / dist, dy / dist
+                step = (1.5 if e.is_boss else 2.0) * dt
+                nx, ny = e.x + vx * step, e.y + vy * step
+                if not self.world.is_blocked(nx, ny):
+                    e.x, e.y = nx, ny
+                else: 
+                    if not self.world.is_blocked(nx, e.y): e.x = nx
+                    elif not self.world.is_blocked(e.x, ny): e.y = ny
+
+            atk_dist = 8.5 if e.is_boss else 6.5
+            if dist < atk_dist and e.cooldown <= 0.0 and line_of_sight(self.world, e.x, e.y, px, py):
+                e.cooldown = random.uniform(0.6, 1.1) if e.is_boss else random.uniform(0.7, 1.3)
+                if random.random() < 0.55:
+                    self.player.hp -= random.randint(15, 30) if e.is_boss else random.randint(2, 6)
+                    self.shake = min(1.0, self.shake + (1.2 if e.is_boss else 0.6))
+
+        if self.player.hp <= 0:
+            self.player.x, self.player.y, self.player.ang = 2.5, 2.5, 0.0
+            self.player.hp, self.player.ammo = 100, 50
+            self.level = 0
+            self._next_level()
+            self.shake = self.fire_flash = 0.0
+
+    def _fire(self):
+        if self.player.ammo <= 0: return
+        self.player.ammo -= 1
+        self.fire_flash, self.shake = 1.0, min(1.0, self.shake + 0.35)
+        
+        best, best_dist = None, 1e9
+        px, py, ang = self.player.x, self.player.y, self.player.ang
+        for e in self.enemies:
+            if not e.alive or e.state == "dying": continue
+            dist = math.hypot(e.x - px, e.y - py)
+            if dist < 0.25: continue
+            
+            tolerance = 0.06 * max(1.0, e.scale * 0.8)
+            if abs(wrap_angle(math.atan2(e.y - py, e.x - px) - ang)) <= tolerance and dist < best_dist:
+                if line_of_sight(self.world, px, py, e.x, e.y):
+                    best, best_dist = e, dist
+
+        if best:
+            tier = min(5, self.level)
+            if tier == 1: dmg = random.randint(15, 25)
+            elif tier == 2: dmg = random.randint(40, 60)
+            elif tier == 3: dmg = random.randint(30, 90)
+            elif tier == 4: dmg = random.randint(120, 160)
+            else: dmg = random.randint(300, 500)
+            
             best.hp -= dmg
             self.hit_marker = 1.0
+            for _ in range(8):
+                self.particles.append(Particle(best.x, best.y, -0.2, (random.random()-0.5)*2, (random.random()-0.5)*2, -random.random()*2, 1.0))
             if best.hp <= 0:
-                best.alive = False
+                best.state = "dying"
+                best.frame = 0
+                best.anim_timer = 0.0
 
-    def _render(self) -> None:
-        self.screen.fill((0, 0, 0))
-
-        # "camera bob" e shake
+    def _render(self):
         bob = math.sin(self.weapon_t) * 2.5 + math.sin(self.weapon_t * 0.5) * 1.5
-        shake_x = (random.random() - 0.5) * 10.0 * (self.shake**2)
-        shake_y = (random.random() - 0.5) * 8.0 * (self.shake**2)
+        sx, sy = (random.random()-0.5)*10*(self.shake**2), (random.random()-0.5)*8*(self.shake**2)
 
-        # chão / teto
-        ceil = (25, 15, 20)
-        floor = (25, 22, 10)
-        self.screen.fill(ceil, pygame.Rect(0, 0, self.W, self.H // 2))
-        self.screen.fill(floor, pygame.Rect(0, self.H // 2, self.W, self.H // 2))
+        self.screen.fill((30, 20, 20), pygame.Rect(0, 0, self.W, self.H // 2))
+        self.screen.fill((35, 30, 20), pygame.Rect(0, self.H // 2, self.W, self.H // 2))
 
-        # raycast paredes
-        num_cols = self.W // self.render_scale
-        col_w = self.render_scale
+        cols = self.W // self.render_scale
+        zbuf = [0.0] * cols
         px, py, pa = self.player.x, self.player.y, self.player.ang
 
-        zbuf = [0.0] * num_cols
-        for col in range(num_cols):
-            cam_x = (2 * col / max(1, num_cols - 1) - 1.0)
+        for col in range(cols):
+            cam_x = (2 * col / max(1, cols - 1) - 1.0)
             ray_ang = pa + math.atan(cam_x * math.tan(self.fov / 2))
+            dist, mx, my, side = cast_ray_dda(self.world, px, py, ray_ang, max_dist=32.0)
+            wd = dist * math.cos(ray_ang - pa)
+            zbuf[col] = wd
+            
+            wh = int(self.H / max(0.0001, wd))
+            y0, x0 = (self.H - wh) // 2 + int(sy), col * self.render_scale + int(sx)
 
-            dist, _, _, side = cast_ray_dda(self.world, px, py, ray_ang, max_dist=32.0)
-            dist *= math.cos(ray_ang - pa)  # remove fish-eye
-            dist = max(0.0001, dist)
-            zbuf[col] = dist
+            hx, hy = px + dist * math.cos(ray_ang), py + dist * math.sin(ray_ang)
+            tex_x = int((hy - my if side == 0 else hx - mx) * 64) % 64
+            strip = self.tex_wall.subsurface((tex_x, 0, 1, 64))
+            
+            shade = max(0.1, 1.0 - wd / 12.0)
+            if side == 1: shade *= 0.7
+            if shade < 1.0:
+                overlay = pygame.Surface((1, 64))
+                overlay.fill((0, 0, 0))
+                overlay.set_alpha(int((1-shade)*255))
+                strip = strip.copy()
+                strip.blit(overlay, (0,0))
+                
+            scale_strip = pygame.transform.scale(strip, (self.render_scale + 1, wh))
+            self.screen.blit(scale_strip, (x0, y0))
 
-            wall_h = int(self.H / dist)
-            y0 = (self.H - wall_h) // 2 + int(shake_y)
-            x0 = col * col_w + int(shake_x)
+        sprites = [(math.hypot(e.x-px, e.y-py), e.x, e.y, e) for e in self.enemies if e.alive]
+        sprites += [(math.hypot(p.x-px, p.y-py), p.x, p.y, p) for p in self.particles]
+        sprites += [(math.hypot(it.x-px, it.y-py), it.x, it.y, it) for it in self.items if it.active]
+        sprites.sort(key=lambda t: -t[0])
 
-            # cor de parede por distância + lado
-            shade = clamp(1.0 - dist / 16.0, 0.08, 1.0)
-            base = (170, 60, 55) if side == 0 else (140, 45, 45)
-            color = (int(base[0] * shade), int(base[1] * shade), int(base[2] * shade))
-            pygame.draw.rect(self.screen, color, pygame.Rect(x0, y0, col_w + 1, wall_h))
+        for dist, ex, ey, obj in sprites:
+            rel = wrap_angle(math.atan2(ey - py, ex - px) - pa)
+            if abs(rel) > self.fov * 0.7 or dist < 0.2: continue
 
-        # sprites (inimigos)
-        sprites: list[tuple[float, Enemy]] = []
-        for e in self.enemies:
-            if not e.alive:
-                continue
-            dx = e.x - px
-            dy = e.y - py
-            dist = math.hypot(dx, dy)
-            sprites.append((dist, e))
-        sprites.sort(key=lambda t: -t[0])  # desenha longe -> perto
+            pt_x = (0.5 + rel / self.fov) * self.W + sx
+            size = (self.H / dist)
+            if isinstance(obj, (Enemy, HealthItem)):
+                if isinstance(obj, Enemy):
+                    if obj.state == "dying":
+                        f_idx = min(obj.frame, max(0, len(self.tex_death_frames) - 1))
+                        tex = self.tex_death_frames[f_idx]
+                    elif obj.is_boss:
+                        f_idx = obj.frame % max(1, len(self.tex_boss_frames))
+                        tex = self.tex_boss_frames[f_idx]
+                    else:
+                        f_idx = obj.frame % max(1, len(self.tex_enemy_frames))
+                        tex = self.tex_enemy_frames[f_idx]
+                else:
+                    tex = self.tex_medkit
 
-        for dist, e in sprites:
-            ang_to = math.atan2(e.y - py, e.x - px)
-            rel = wrap_angle(ang_to - pa)
-            if abs(rel) > self.fov * 0.62:
-                continue
+                scale = obj.scale if isinstance(obj, Enemy) else 1.0
+                hw, hh = size * 0.7 * scale, size * 0.7 * scale
+                if hw < 1 or hh < 1: continue
+                top, left = self.H / 2 - hh / 2 + sy, pt_x - hw / 2
+                
+                if isinstance(obj, HealthItem):
+                    top += size * 0.15
 
-            # projeta no plano da tela
-            sx = (0.5 + (rel / self.fov)) * self.W + shake_x
-            if dist < 0.2:
-                continue
+                x_start, x_end = int(left), int(left + hw)
+                
+                if x_start >= self.W or x_end < 0: continue
+                scaled_tex = pygame.transform.scale(tex, (int(hw), int(hh)))
+                
+                for x in range(max(0, x_start), min(self.W, x_end)):
+                    ci = x // self.render_scale
+                    if 0 <= ci < cols and zbuf[ci] < dist: continue
+                    tex_x = min(x - x_start, int(hw) - 1)
+                    strip = scaled_tex.subsurface((tex_x, 0, 1, int(hh)))
+                    self.screen.blit(strip, (x, int(top)))
 
-            size = (self.H / dist) * 0.85
-            top = (self.H / 2 - size / 2) + shake_y
-            left = sx - size / 2
+                if isinstance(obj, Enemy) and obj.state != "dying":
+                    hp_ratio = max(0.0, obj.hp / obj.max_hp)
+                    bar_w = int(hw * 0.8)
+                    bar_h = max(2, int(size * 0.05))
+                    bar_x = int(pt_x - bar_w / 2)
+                    bar_y = int(top - bar_h - size * 0.05)
+                    pygame.draw.rect(self.screen, (150, 0, 0), (bar_x, bar_y, bar_w, bar_h))
+                    if obj.hp > 0:
+                        pygame.draw.rect(self.screen, (0, 200, 0), (bar_x, bar_y, int(bar_w * hp_ratio), bar_h))
 
-            # desenha em "fatias" respeitando z-buffer
-            x_start = int(left)
-            x_end = int(left + size)
-            if x_end < 0 or x_start >= self.W:
-                continue
+            else:
+                p = obj
+                psize = max(2, int(size * 0.05))
+                ptop = self.H / 2 + (p.z * size) + sy
+                ci = int(pt_x) // self.render_scale
+                if 0 <= ci < cols and dist < zbuf[ci]:
+                    pygame.draw.rect(self.screen, (200, 20, 20), (pt_x, ptop, psize, psize))
 
-            # aparência do inimigo
-            # corpo
-            body_col = (60, 190, 70)
-            if e.hp < 20:
-                body_col = (210, 180, 40)
-
-            for x in range(max(0, x_start), min(self.W, x_end)):
-                col_idx = int(x / col_w)
-                if 0 <= col_idx < num_cols and dist >= zbuf[col_idx]:
-                    continue
-                # variação pra dar "textura"
-                t = (x - x_start) / max(1.0, (x_end - x_start))
-                dark = 0.85 + 0.15 * math.sin(t * math.tau * 3)
-                c = (int(body_col[0] * dark), int(body_col[1] * dark), int(body_col[2] * dark))
-                pygame.draw.line(self.screen, c, (x, int(top)), (x, int(top + size)))
-
-            # barra de vida pequena
-            bx = int(sx - 18)
-            by = int(top - 10)
-            hpw = int(36 * clamp(e.hp / 60.0, 0.0, 1.0))
-            pygame.draw.rect(self.screen, (40, 10, 10), pygame.Rect(bx, by, 36, 5))
-            pygame.draw.rect(self.screen, (220, 40, 40), pygame.Rect(bx, by, hpw, 5))
-
-        # crosshair + hit marker
-        cx, cy = self.W // 2 + int(shake_x * 0.25), self.H // 2 + int(shake_y * 0.25)
-        pygame.draw.line(self.screen, (220, 220, 220), (cx - 8, cy), (cx - 2, cy), 2)
-        pygame.draw.line(self.screen, (220, 220, 220), (cx + 2, cy), (cx + 8, cy), 2)
-        pygame.draw.line(self.screen, (220, 220, 220), (cx, cy - 8), (cx, cy - 2), 2)
-        pygame.draw.line(self.screen, (220, 220, 220), (cx, cy + 2), (cx, cy + 8), 2)
-        if self.hit_marker > 0:
-            a = int(255 * self.hit_marker)
-            pygame.draw.line(self.screen, (255, 255, 255, a), (cx - 14, cy - 14), (cx - 6, cy - 6), 3)
-            pygame.draw.line(self.screen, (255, 255, 255, a), (cx + 14, cy - 14), (cx + 6, cy - 6), 3)
-            pygame.draw.line(self.screen, (255, 255, 255, a), (cx - 14, cy + 14), (cx - 6, cy + 6), 3)
-            pygame.draw.line(self.screen, (255, 255, 255, a), (cx + 14, cy + 14), (cx + 6, cy + 6), 3)
-
-        # arma (overlay)
-        self._draw_weapon(bob=bob, shake_x=shake_x, shake_y=shake_y)
-
-        # HUD
+        self._draw_weapon(bob, sx, sy)
         self._draw_hud()
-
-        # minimapa
-        self._draw_minimap()
+        
+        pad, s = 10, 6
+        x0, y0 = self.W - self.world.w*s - pad, pad
+        pygame.draw.rect(self.screen, (0,0,0), (x0-1, y0-1, self.world.w*s+2, self.world.h*s+2))
+        for gy in range(self.world.h):
+            for gx in range(self.world.w):
+                if self.world.is_wall(gx, gy): pygame.draw.rect(self.screen, (160, 80, 80), (x0+gx*s, y0+gy*s, s, s))
+        for e in self.enemies:
+            if e.alive and e.state != "dying": 
+                c = (255, 100, 0) if e.is_boss else (200, 40, 40)
+                r = 4 if e.is_boss else 2
+                pygame.draw.circle(self.screen, c, (x0+int(e.x*s), y0+int(e.y*s)), r)
+        for it in self.items:
+            if it.active: pygame.draw.circle(self.screen, (200, 200, 255), (x0+int(it.x*s), y0+int(it.y*s)), 2)
+        px_m, py_m = x0+int(px*s), y0+int(py*s)
+        pygame.draw.circle(self.screen, (220, 220, 220), (px_m, py_m), 3)
+        pygame.draw.line(self.screen, (220, 220, 220), (px_m, py_m), (px_m+int(math.cos(pa)*5), py_m+int(math.sin(pa)*5)), 2)
+        
+        if self.level % 5 == 0 and self.level_msg_timer > 0:
+            msg = self.big_font.render("BOSS LEVEL!", True, (255, 0, 0))
+            self.screen.blit(msg, (self.W//2 - msg.get_width()//2, self.H//3))
 
         pygame.display.flip()
 
-    def _draw_weapon(self, bob: float, shake_x: float, shake_y: float) -> None:
-        w, h = 240, 170
-        x = self.W // 2 - w // 2 + int(bob * 2) + int(shake_x * 0.4)
-        y = self.H - h + int(abs(bob) * 2) + int(shake_y * 0.4)
+    def _draw_weapon(self, bob, sx, sy):
+        tex = self.tex_weapon_shoot if self.fire_flash > 0 else self.tex_weapon_idle
+        
+        if self.moving_right:
+            tex = pygame.transform.flip(tex, True, False)
+            
+        w, h = tex.get_size()
+        target_h = self.H * 0.65 
+        scale = target_h / max(1, h)
+        target_w = int(w * scale)
+        
+        bx = int(bob * 2) + int(sx * 0.4)
+        by = int(abs(bob) * 2) + int(sy * 0.4)
+        
+        x = self.W // 2 - target_w // 2 + bx
+        y = self.H - target_h + by + 20
+        
+        scaled_tex = pygame.transform.scale(tex, (target_w, int(target_h)))
+        self.screen.blit(scaled_tex, (x, y))
 
-        # base
-        pygame.draw.rect(self.screen, (25, 25, 25), pygame.Rect(x, y, w, h), border_radius=10)
-        pygame.draw.rect(self.screen, (80, 70, 70), pygame.Rect(x + 20, y + 40, w - 40, h - 60), border_radius=8)
-        pygame.draw.rect(self.screen, (130, 120, 120), pygame.Rect(x + 35, y + 55, w - 70, h - 95), border_radius=6)
-        # cano
-        pygame.draw.rect(self.screen, (45, 45, 45), pygame.Rect(x + w // 2 - 20, y + 20, 40, 35), border_radius=6)
-        pygame.draw.rect(self.screen, (15, 15, 15), pygame.Rect(x + w // 2 - 10, y + 18, 20, 20), border_radius=6)
+    def _draw_hud(self):
+        txt = f"LEVEL {self.level} | HP {self.player.hp:3d} | MUNI {self.player.ammo:3d} | DEMONIOS {sum(1 for e in self.enemies if e.alive and e.state != 'dying')}"
+        surf = self.font.render(txt, True, (255, 50, 50) if self.player.hp <= 30 else (230, 230, 230))
+        self.screen.blit(surf, (20, self.H - 30))
+        
+        if self.level_msg_timer > 0 and self.level % 5 != 0:
+            msg = self.big_font.render(f"NÍVEL {self.level}", True, (255, 215, 0))
+            self.screen.blit(msg, (self.W//2 - msg.get_width()//2, self.H//4))
 
-        if self.fire_flash > 0:
-            a = self.fire_flash
-            fx = x + w // 2
-            fy = y + 20
-            r = int(45 * a)
-            col = (255, int(220 * a), int(110 * a))
-            pygame.draw.circle(self.screen, col, (fx, fy), r)
-
-    def _draw_hud(self) -> None:
-        hp = self.player.hp
-        ammo = self.player.ammo
-        alive = sum(1 for e in self.enemies if e.alive)
-
-        txt = f"HP {hp:3d}   AMMO {ammo:3d}   ENEMIES {alive}"
-        surf = self.font.render(txt, True, (230, 230, 230))
-        bg = pygame.Surface((surf.get_width() + 14, surf.get_height() + 10), pygame.SRCALPHA)
-        bg.fill((0, 0, 0, 140))
-        self.screen.blit(bg, (12, self.H - 12 - bg.get_height()))
-        self.screen.blit(surf, (19, self.H - 7 - surf.get_height()))
-
-        hint = "WASD move | Mouse look (TAB) | Click shoot | SHIFT run | R +25 ammo | ESC sair"
-        hs = pygame.font.SysFont("consolas", 14).render(hint, True, (190, 190, 190))
-        self.screen.blit(hs, (12, 10))
-
-        if hp <= 30:
-            v = int(120 * (1 + math.sin(pygame.time.get_ticks() * 0.01)) / 2)
-            overlay = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
-            overlay.fill((120, 0, 0, v))
-            self.screen.blit(overlay, (0, 0))
-
-    def _draw_minimap(self) -> None:
-        scale = 8
-        pad = 10
-        mw = self.world.w * scale
-        mh = self.world.h * scale
-        x0 = self.W - mw - pad
-        y0 = pad
-        bg = pygame.Surface((mw + 2, mh + 2), pygame.SRCALPHA)
-        bg.fill((0, 0, 0, 120))
-        self.screen.blit(bg, (x0 - 1, y0 - 1))
-
-        for gy in range(self.world.h):
-            for gx in range(self.world.w):
-                if self.world.is_wall(gx, gy):
-                    pygame.draw.rect(
-                        self.screen,
-                        (160, 80, 80),
-                        pygame.Rect(x0 + gx * scale, y0 + gy * scale, scale, scale),
-                    )
-
-        # inimigos
-        for e in self.enemies:
-            if not e.alive:
-                continue
-            ex = x0 + int(e.x * scale)
-            ey = y0 + int(e.y * scale)
-            pygame.draw.circle(self.screen, (60, 200, 80), (ex, ey), 2)
-
-        # player
-        px = x0 + int(self.player.x * scale)
-        py = y0 + int(self.player.y * scale)
-        pygame.draw.circle(self.screen, (220, 220, 220), (px, py), 3)
-        dx = int(math.cos(self.player.ang) * 6)
-        dy = int(math.sin(self.player.ang) * 6)
-        pygame.draw.line(self.screen, (220, 220, 220), (px, py), (px + dx, py + dy), 2)
-
-
-def main() -> None:
-    Game().run()
-
+        if self.hit_marker > 0:
+           cx, cy = self.W//2, self.H//2
+           pygame.draw.circle(self.screen, (255, 255, 255), (cx, cy), 15, 2)
+        if self.player.hp <= 30:
+            ov = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+            ov.fill((120, 0, 0, int(60*(1+math.sin(pygame.time.get_ticks()*0.01)))))
+            self.screen.blit(ov, (0, 0))
+            
+        if self.heal_flash > 0:
+            ov = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
+            ov.fill((50, 200, 50, int(50 * self.heal_flash)))
+            self.screen.blit(ov, (0, 0))
 
 if __name__ == "__main__":
-    main()
-
+    Game().run()
