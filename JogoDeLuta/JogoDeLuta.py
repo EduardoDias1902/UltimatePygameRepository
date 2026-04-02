@@ -1,5 +1,6 @@
 import pygame
 import sys
+import os
 
 # Configurações de Tela
 WIDTH, HEIGHT = 1000, 600
@@ -40,7 +41,9 @@ class Fighter:
         
         for action in actions:
             try:
-                img = pygame.image.load(f"{name}{action}.png").convert_alpha()
+                # Carrega da nova pasta 'images' relativa ao script
+                path = os.path.join(os.path.dirname(__file__), "images", f"{name}{action}.png")
+                img = pygame.image.load(path).convert_alpha()
                 # Força todas as imagens a terem o mesmo tamanho exato
                 self.sprites[action] = pygame.transform.scale(img, (self.width, self.height))
             except:
