@@ -196,23 +196,39 @@ def generate_textures():
     tex_death_frames = load_gif(gif_death)
     if not tex_death_frames: tex_death_frames = [enemy_tex]
 
+    # Texturas de Chao e Teto Procedurais
+    floor_tex = pygame.Surface((64, 64))
+    ceiling_tex = pygame.Surface((64, 64))
+    for y in range(64):
+        for x in range(64):
+            # Padrao de Chao
+            cf = random.randint(40, 70)
+            if x % 32 < 2 or y % 32 < 2: cf = 30
+            floor_tex.set_at((x, y), (cf, cf, cf))
+            # Padrao de Teto
+            cc = random.randint(20, 40)
+            if (x+y) % 16 < 2: cc = 50
+            ceiling_tex.set_at((x, y), (cc, cc, cc+10))
+
     medkit_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
     pygame.draw.rect(medkit_tex, (220, 220, 220), (16, 24, 32, 24), border_radius=4)
     pygame.draw.rect(medkit_tex, (200, 30, 30), (28, 28, 8, 16))
     pygame.draw.rect(medkit_tex, (200, 30, 30), (24, 32, 16, 8))
     pygame.draw.rect(medkit_tex, (100, 100, 100), (24, 18, 16, 6))
 
-    idle_path = os.path.join(os.path.dirname(__file__), "images", "pistolIdle.png")
-    shoot_path = os.path.join(os.path.dirname(__file__), "images", "pistolShooting.png")
-    try:
-        tex_weapon_idle = pygame.image.load(idle_path).convert_alpha()
-        tex_weapon_shoot = pygame.image.load(shoot_path).convert_alpha()
-    except Exception as e:
-        print("Failed to load weapon PNGs:", e)
-        tex_weapon_idle = pygame.Surface((240, 240), pygame.SRCALPHA)
-        tex_weapon_shoot = pygame.Surface((240, 240), pygame.SRCALPHA)
+    def load_wep(idle_f, shoot_f):
+        try:
+            idle = pygame.image.load(os.path.join(img_dir, idle_f)).convert_alpha()
+            shoot = pygame.image.load(os.path.join(img_dir, shoot_f)).convert_alpha()
+            return idle, shoot
+        except:
+            s = pygame.Surface((240, 240), pygame.SRCALPHA)
+            return s, s
 
-    return wall_tex, tex_enemy_frames, tex_boss_frames, tex_death_frames, medkit_tex, tex_weapon_idle, tex_weapon_shoot
+    p_idle, p_shoot = load_wep("pistolIdle.png", "pistolShooting.png")
+    s_idle, s_shoot = load_wep("ShootGunIdle.png", "ShootGunShotting.png")
+
+    return wall_tex, tex_enemy_frames, tex_boss_frames, tex_death_frames, medkit_tex, p_idle, p_shoot, s_idle, s_shoot, floor_tex, ceiling_tex
 
 class Game:
     def __init__(self) -> None:
@@ -228,7 +244,9 @@ class Game:
         self.render_scale = 2 
         self.fov = math.radians(66)
         
-        self.tex_wall, self.tex_enemy_frames, self.tex_boss_frames, self.tex_death_frames, self.tex_medkit, self.tex_weapon_idle, self.tex_weapon_shoot = generate_textures()
+        self.tex_wall, self.tex_enemy_frames, self.tex_boss_frames, self.tex_death_frames, self.tex_medkit, self.p_idle, self.p_shoot, self.s_idle, self.s_shoot, self.tex_floor, self.tex_ceiling = generate_textures()
+        
+        self.wep_msg_timer = 0.0
 
         self.maps = [
             [
@@ -276,9 +294,9 @@ class Game:
             [
                 "########################",
                 "#..........##..........#",
-                "#..........##..........#",
-                "####..############..####",
-                "#..........##..........#",
+                "#...####...##...####...#",
+                "####..##........##..####",
+                "#...####........##...###",
                 "#..........##..........#",
                 "#..###..########..###..#",
                 "#..###..########..###..#",
@@ -310,6 +328,10 @@ class Game:
         self.heal_flash = 0.0
         self.moving_right = False
         
+        self.mira_x = self.W // 2
+        self.mira_y = self.H // 2
+        self.pitch = 0
+        
         self._next_level()
         self.level_msg_timer = 0.0
 
@@ -321,22 +343,31 @@ class Game:
         for gy in range(self.world.h):
             for gx in range(self.world.w):
                 if not self.world.is_wall(gx, gy):
-                    # Avoid spawning where player is
                     if math.hypot(gx+0.5 - self.player.x, gy+0.5 - self.player.y) > 2.0:
                         free_spots.append((gx + 0.5, gy + 0.5))
         if not free_spots: return
         for _ in range(4):
             spot = random.choice(free_spots)
             self.items.append(HealthItem(spot[0], spot[1]))
+            
+    def _get_map_colors(self):
+        themes = [
+            ((30, 25, 20), (20, 20, 30)),
+            ((40, 40, 40), (10, 10, 10)),
+            ((50, 30, 20), (30, 20, 20)),
+            ((20, 10, 10), (50, 0, 0)),
+        ]
+        return themes[self.map_idx % len(themes)]
 
     def _next_level(self):
         self.level += 1
+        if self.level == 4:
+            self.wep_msg_timer = 3.0
+            self.player.ammo += 100
         
-        # Change map after boss level (when moving into level 6, 11, etc)
         if self.level > 1 and (self.level - 1) % 5 == 0:
             self.map_idx = (self.map_idx + 1) % len(self.maps)
             self.world = World(self.maps[self.map_idx])
-            # Reset player to safe spot in new map
             self.player.x, self.player.y = 1.5, 1.5
             self._respawn_items()
 
@@ -387,7 +418,9 @@ class Game:
     def _handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                sys.exit()
+                pygame.quit(); sys.exit()
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
+                self._next_level()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE: sys.exit()
                 if event.key == pygame.K_TAB: self.toggle_mouse()
@@ -399,17 +432,24 @@ class Game:
         keys = pygame.key.get_pressed()
 
         self.level_msg_timer = max(0.0, self.level_msg_timer - dt)
+        self.wep_msg_timer = max(0.0, self.wep_msg_timer - dt)
 
         alive_count = sum(1 for e in self.enemies if e.state != "dying" and e.alive)
         if alive_count == 0 and self.player.hp > 0:
             self._next_level()
 
         if self.mouse_look:
-            mx, _ = pygame.mouse.get_rel()
+            mx, my = pygame.mouse.get_rel()
             self.player.ang = wrap_angle(self.player.ang + mx * 0.0022)
+            self.pitch = clamp(self.pitch - my * 1.5, -self.H // 2, self.H // 2)
+            self.mira_x = self.W // 2
+            self.mira_y = self.H // 2
         else:
             rot = (1.0 if keys[pygame.K_LEFT] else 0) - (1.0 if keys[pygame.K_RIGHT] else 0)
             self.player.ang = wrap_angle(self.player.ang + rot * self.player.rot_speed * dt)
+            self.mira_x = self.W // 2
+            self.mira_y = self.H // 2
+            self.pitch = 0
 
         move = pygame.Vector2()
         fw = pygame.Vector2(math.cos(self.player.ang), math.sin(self.player.ang))
@@ -460,7 +500,7 @@ class Game:
             
             if e.state == "dying":
                 e.anim_timer += dt
-                if e.anim_timer > 0.015: # Accelerated Death animation
+                if e.anim_timer > 0.015:
                     e.anim_timer = 0.0
                     e.frame += 1
                     if e.frame >= len(self.tex_death_frames):
@@ -479,11 +519,11 @@ class Game:
             if e.state == "chase" and dist > 1.2:
                 e.anim_timer += dt
                 if e.is_boss:
-                    if e.anim_timer > 0.02: # Extremely fast BOSS animation
+                    if e.anim_timer > 0.02:
                         e.anim_timer = 0.0
                         e.frame = (e.frame + 1) % max(1, len(self.tex_boss_frames))
                 else:
-                    if e.anim_timer > 0.12: # Normal skeleton animation
+                    if e.anim_timer > 0.12:
                         e.anim_timer = 0.0
                         e.frame = (e.frame + 1) % max(1, len(self.tex_enemy_frames))
 
@@ -511,29 +551,46 @@ class Game:
             self.shake = self.fire_flash = 0.0
 
     def _fire(self):
-        if self.player.ammo <= 0: return
-        self.player.ammo -= 1
-        self.fire_flash, self.shake = 1.0, min(1.0, self.shake + 0.35)
+        is_shotgun = self.level >= 4
+        ammo_cost = 2 if is_shotgun else 1
+        
+        if self.player.ammo < ammo_cost: return
+        self.player.ammo -= ammo_cost
+        self.fire_flash, self.shake = 1.0, min(1.0, self.shake + (0.5 if is_shotgun else 0.3))
         
         best, best_dist = None, 1e9
-        px, py, ang = self.player.x, self.player.y, self.player.ang
+        px, py, pa = self.player.x, self.player.y, self.player.ang
+        
+        cam_x_mira = (2 * self.mira_x / self.W - 1.0)
+        ang_mira = pa + math.atan(cam_x_mira * math.tan(self.fov / 2))
+        
+        sy_curr = (random.random()-0.5)*8*(self.shake**2)
+
         for e in self.enemies:
             if not e.alive or e.state == "dying": continue
             dist = math.hypot(e.x - px, e.y - py)
             if dist < 0.25: continue
             
-            tolerance = 0.06 * max(1.0, e.scale * 0.8)
-            if abs(wrap_angle(math.atan2(e.y - py, e.x - px) - ang)) <= tolerance and dist < best_dist:
-                if line_of_sight(self.world, px, py, e.x, e.y):
-                    best, best_dist = e, dist
+            tolerance = 0.08 if is_shotgun else 0.05
+            rel_ang = wrap_angle(math.atan2(e.y - py, e.x - px) - ang_mira)
+            
+            if abs(rel_ang) <= tolerance:
+                size = (self.H / dist)
+                hh = size * 0.7 * e.scale
+                top = self.H / 2 - hh / 2 + sy_curr + self.pitch
+                bottom = top + hh
+                
+                if top <= self.mira_y <= bottom:
+                    if line_of_sight(self.world, px, py, e.x, e.y):
+                        if dist < best_dist:
+                            best, best_dist = e, dist
 
         if best:
-            tier = min(5, self.level)
-            if tier == 1: dmg = random.randint(15, 25)
-            elif tier == 2: dmg = random.randint(40, 60)
-            elif tier == 3: dmg = random.randint(30, 90)
-            elif tier == 4: dmg = random.randint(120, 160)
-            else: dmg = random.randint(300, 500)
+            if not is_shotgun:
+                dmg = random.randint(20, 30)
+            else:
+                lvl_bonus = (self.level - 4) * 50
+                dmg = random.randint(150, 220) + lvl_bonus
             
             best.hp -= dmg
             self.hit_marker = 1.0
@@ -547,13 +604,52 @@ class Game:
     def _render(self):
         bob = math.sin(self.weapon_t) * 2.5 + math.sin(self.weapon_t * 0.5) * 1.5
         sx, sy = (random.random()-0.5)*10*(self.shake**2), (random.random()-0.5)*8*(self.shake**2)
+        px, py, pa = self.player.x, self.player.y, self.player.ang
 
-        self.screen.fill((30, 20, 20), pygame.Rect(0, 0, self.W, self.H // 2))
-        self.screen.fill((35, 30, 20), pygame.Rect(0, self.H // 2, self.W, self.H // 2))
+        horizon = self.H // 2 + self.pitch
+        floor_clr, ceil_clr = self._get_map_colors()
+        pygame.draw.rect(self.screen, ceil_clr, (0, 0, self.W, horizon))
+        pygame.draw.rect(self.screen, floor_clr, (0, horizon, self.W, self.H - horizon))
+
+        res = 4 
+        cos_pa, sin_pa = math.cos(pa), math.sin(pa)
+        cos_pa_rt, sin_pa_rt = math.cos(pa + math.pi/2), math.sin(pa + math.pi/2)
+        fov_w = math.tan(self.fov/2)
+
+        for y in range(int(horizon), self.H, res):
+            dy = max(1, y - (self.H // 2 + self.pitch))
+            dist = (self.H * 0.5) / dy
+            shade = max(0.1, 1.0 - dist / 11.0)
+            if shade < 0.1: continue
+
+            for x in range(0, self.W, res):
+                cam_x = (2.0 * x / (self.W - 1) - 1.0) * fov_w
+                world_x = px + dist * (cos_pa + cam_x * cos_pa_rt)
+                world_y = py + dist * (sin_pa + cam_x * sin_pa_rt)
+                
+                tx, ty = int(world_x * 64) % 64, int(world_y * 64) % 64
+                color = self.tex_floor.get_at((tx, ty))
+                color = (int(color[0] * shade), int(color[1] * shade), int(color[2] * shade))
+                pygame.draw.rect(self.screen, color, (x, y, res, res))
+
+        for y in range(0, int(horizon), res):
+            dy = max(1, (self.H // 2 + self.pitch) - y)
+            dist = (self.H * 0.5) / dy
+            shade = max(0.1, 0.7 - dist / 20.0)
+            if shade < 0.1: continue
+
+            for x in range(0, self.W, res):
+                cam_x = (2.0 * x / (self.W - 1) - 1.0) * fov_w
+                world_x = px + dist * (cos_pa + cam_x * cos_pa_rt)
+                world_y = py + dist * (sin_pa + cam_x * sin_pa_rt)
+                
+                tx, ty = int(world_x * 64) % 64, int(world_y * 64) % 64
+                color = self.tex_ceiling.get_at((tx, ty))
+                color = (int(color[0] * shade), int(color[1] * shade), int(color[2] * shade))
+                pygame.draw.rect(self.screen, color, (x, y, res, res))
 
         cols = self.W // self.render_scale
         zbuf = [0.0] * cols
-        px, py, pa = self.player.x, self.player.y, self.player.ang
 
         for col in range(cols):
             cam_x = (2 * col / max(1, cols - 1) - 1.0)
@@ -563,7 +659,7 @@ class Game:
             zbuf[col] = wd
             
             wh = int(self.H / max(0.0001, wd))
-            y0, x0 = (self.H - wh) // 2 + int(sy), col * self.render_scale + int(sx)
+            y0, x0 = (self.H - wh) // 2 + int(sy) + self.pitch, col * self.render_scale + int(sx)
 
             hx, hy = px + dist * math.cos(ray_ang), py + dist * math.sin(ray_ang)
             tex_x = int((hy - my if side == 0 else hx - mx) * 64) % 64
@@ -609,7 +705,7 @@ class Game:
                 scale = obj.scale if isinstance(obj, Enemy) else 1.0
                 hw, hh = size * 0.7 * scale, size * 0.7 * scale
                 if hw < 1 or hh < 1: continue
-                top, left = self.H / 2 - hh / 2 + sy, pt_x - hw / 2
+                top, left = self.H / 2 - hh / 2 + sy + self.pitch, pt_x - hw / 2
                 
                 if isinstance(obj, HealthItem):
                     top += size * 0.15
@@ -639,7 +735,7 @@ class Game:
             else:
                 p = obj
                 psize = max(2, int(size * 0.05))
-                ptop = self.H / 2 + (p.z * size) + sy
+                ptop = self.H / 2 + (p.z * size) + sy + self.pitch
                 ci = int(pt_x) // self.render_scale
                 if 0 <= ci < cols and dist < zbuf[ci]:
                     pygame.draw.rect(self.screen, (200, 20, 20), (pt_x, ptop, psize, psize))
@@ -671,20 +767,16 @@ class Game:
         pygame.display.flip()
 
     def _draw_weapon(self, bob, sx, sy):
-        tex = self.tex_weapon_shoot if self.fire_flash > 0 else self.tex_weapon_idle
+        if self.level <= 3:
+            tex_idle, tex_shoot = self.p_idle, self.p_shoot
+        else:
+            tex_idle, tex_shoot = self.s_idle, self.s_shoot
+            
+        tex = tex_shoot if self.fire_flash > 0.1 else tex_idle
         
         if self.moving_right:
             tex = pygame.transform.flip(tex, True, False)
             
-        w, h = tex.get_size()
-        target_h = self.H * 0.65 
-        scale = target_h / max(1, h)
-        target_w = int(w * scale)
-        
-        bx = int(bob * 2) + int(sx * 0.4)
-        by = int(abs(bob) * 2) + int(sy * 0.4)
-        
-        x = self.W // 2 - target_w // 2 + bx
         y = self.H - target_h + by + 20
         
         scaled_tex = pygame.transform.scale(tex, (target_w, int(target_h)))
@@ -699,9 +791,19 @@ class Game:
             msg = self.big_font.render(f"NÍVEL {self.level}", True, (255, 215, 0))
             self.screen.blit(msg, (self.W//2 - msg.get_width()//2, self.H//4))
 
+        if self.wep_msg_timer > 0:
+            font = pygame.font.SysFont('Arial', 48, bold=True)
+            msg = font.render("SHOTGUN DESBLOQUEADA!", True, (255, 255, 0))
+            self.screen.blit(msg, (self.W//2 - msg.get_width()//2, self.H//2))
+
         if self.hit_marker > 0:
-           cx, cy = self.W//2, self.H//2
-           pygame.draw.circle(self.screen, (255, 255, 255), (cx, cy), 15, 2)
+           pygame.draw.circle(self.screen, (255, 255, 255), (int(self.mira_x), int(self.mira_y)), 15, 2)
+        else:
+           # Mira padrão
+           pygame.draw.circle(self.screen, (255, 255, 255), (int(self.mira_x), int(self.mira_y)), 2, 1)
+           pygame.draw.line(self.screen, (255, 255, 255), (self.mira_x - 10, self.mira_y), (self.mira_x + 10, self.mira_y), 1)
+           pygame.draw.line(self.screen, (255, 255, 255), (self.mira_x, self.mira_y - 10), (self.mira_x, self.mira_y + 10), 1)
+           
         if self.player.hp <= 30:
             ov = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
             ov.fill((120, 0, 0, int(60*(1+math.sin(pygame.time.get_ticks()*0.01)))))
