@@ -163,6 +163,7 @@ def load_gif(filepath) -> list[pygame.Surface]:
     return frames
 
 def generate_textures():
+    img_dir = os.path.join(os.path.dirname(__file__), "images")
     wall_tex = pygame.Surface((64, 64))
     for y in range(64):
         for x in range(64):
@@ -777,10 +778,20 @@ class Game:
         if self.moving_right:
             tex = pygame.transform.flip(tex, True, False)
             
-        y = self.H - target_h + by + 20
+        orig_w, orig_h = tex.get_size()
+        if orig_h == 0: orig_h = 1
         
-        scaled_tex = pygame.transform.scale(tex, (target_w, int(target_h)))
-        self.screen.blit(scaled_tex, (x, y))
+        target_h = self.H * 0.7
+        target_w = orig_w * (target_h / orig_h)
+        
+        bx = int(math.cos(self.weapon_t) * 15)
+        by = int(bob * 10)
+        
+        x = (self.W - target_w) // 2 + bx + sx
+        y = self.H - target_h + by + 20 + sy
+        
+        scaled_tex = pygame.transform.scale(tex, (int(target_w), int(target_h)))
+        self.screen.blit(scaled_tex, (int(x), int(y)))
 
     def _draw_hud(self):
         txt = f"LEVEL {self.level} | HP {self.player.hp:3d} | MUNI {self.player.ammo:3d} | DEMONIOS {sum(1 for e in self.enemies if e.alive and e.state != 'dying')}"
