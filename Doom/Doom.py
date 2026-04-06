@@ -22,6 +22,9 @@ class Player:
     ang: float
     hp: int = 100
     ammo: int = 50
+    medkits: int = 0
+    grenades: int = 3
+    weapon_idx: int = 0
     move_speed: float = 2.8
     rot_speed: float = 2.4
 
@@ -48,14 +51,27 @@ class Particle:
     vx: float
     vy: float
     vz: float
+    color: tuple
     life: float
 
 @dataclass
-class HealthItem:
+class Item:
     x: float
     y: float
+    type: str = "health" # "health" or "grenade"
     active: bool = True
     timer: float = 0.0
+
+@dataclass
+class Grenade:
+    x: float
+    y: float
+    z: float
+    vx: float
+    vy: float
+    vz: float
+    fuse: float
+    bounced: int = 0
 
 @dataclass
 class Projectile:
@@ -268,6 +284,29 @@ def generate_textures():
     pygame.draw.rect(medkit_tex, (200, 30, 30), (24, 32, 16, 8))
     pygame.draw.rect(medkit_tex, (100, 100, 100), (24, 18, 16, 6))
 
+    gif_portal = os.path.join(img_dir, "portal.gif")
+    tex_portal_frames = load_gif(gif_portal)
+    if not tex_portal_frames: tex_portal_frames = [wall_tex]
+    
+    tex_portal_red_frames = []
+    for f in tex_portal_frames:
+        rf = f.copy()
+        tint = pygame.Surface(f.get_size()).convert_alpha()
+        tint.fill((255, 50, 50))
+        rf.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+        tex_portal_red_frames.append(rf)
+
+    key_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
+    pygame.draw.circle(key_tex, (255, 215, 0), (32, 24), 12, 3)
+    pygame.draw.rect(key_tex, (255, 215, 0), (30, 32, 4, 20))
+    pygame.draw.rect(key_tex, (255, 215, 0), (34, 36, 8, 4))
+    pygame.draw.rect(key_tex, (255, 215, 0), (34, 44, 8, 4))
+
+    grenade_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
+    pygame.draw.circle(grenade_tex, (80, 100, 60), (32, 36), 18)
+    pygame.draw.rect(grenade_tex, (50, 60, 40), (28, 16, 8, 10))
+    pygame.draw.circle(grenade_tex, (180, 180, 180), (38, 18), 6, 2) # Pin ring
+
     def load_wep(idle_f, shoot_f, icon_f):
         try:
             idle = pygame.image.load(os.path.join(img_dir, idle_f)).convert_alpha()
@@ -285,7 +324,7 @@ def generate_textures():
     s_idle, s_shoot, s_icon = load_wep("ShotgunIdle.png", "ShotgunShotting.png", "ShotgunPrint.png")
 
     return (wall_tex, tex_enemy_frames, tex_boss_frames, tex_death_frames, medkit_tex, p_idle, p_shoot, p_icon, s_idle, s_shoot, s_icon, floor_tex, ceiling_tex,
-            wall_tex_jungle, tex_enemy_v2_frames, tex_boss_v2_frames, floor_tex_jungle, ceiling_tex_jungle)
+            wall_tex_jungle, tex_enemy_v2_frames, tex_boss_v2_frames, floor_tex_jungle, ceiling_tex_jungle, tex_portal_frames, tex_portal_red_frames, key_tex, grenade_tex)
 
 class Game:
     def __init__(self) -> None:
@@ -303,7 +342,8 @@ class Game:
         
         (self.tex_wall_def, self.tex_enemy_def, self.tex_boss_def, self.tex_death_frames, self.tex_medkit, 
          self.p_idle, self.p_shoot, self.p_icon, self.s_idle, self.s_shoot, self.s_icon, self.tex_floor_def, self.tex_ceiling_def,
-         self.tex_wall_jungle, self.tex_enemy_v2, self.tex_boss_v2, self.tex_floor_jungle, self.tex_ceiling_jungle) = generate_textures()
+         self.tex_wall_jungle, self.tex_enemy_v2, self.tex_boss_v2, self.tex_floor_jungle, self.tex_ceiling_jungle,
+         self.tex_portal, self.tex_portal_red, self.tex_key, self.tex_grenade) = generate_textures()
         
         self.tex_wall = self.tex_wall_def
         self.tex_enemy_frames = self.tex_enemy_def
@@ -311,6 +351,17 @@ class Game:
         self.tex_floor = self.tex_floor_def
         self.tex_ceiling = self.tex_ceiling_def
         
+        self.player_has_key = False
+        self.key_pos = None
+        self.portal_pos = (2.5, 2.5)
+        self.portal_frame = 0
+        self.portal_timer = 0.0
+        
+        self.grenades_list: list[Grenade] = []
+        self.grenade_throw_anim = 0.0
+        self.items: list[Item] = []
+        self.particles: list[Particle] = []
+        self.projectiles: list[Projectile] = []
         self.wep_msg_timer = 0.0
 
         self.maps = [
@@ -378,12 +429,11 @@ class Game:
         self.player_radius = 0.2
         self.enemies: list[Enemy] = []
         self.particles: list[Particle] = []
-        self.items: list[HealthItem] = []
+        self.items: list[Item] = []
         self.projectiles: list[Projectile] = []
-        self._respawn_items()
-        
         self.level = 0
         self.level_msg_timer = 0.0
+        self._respawn_items()
 
         self.shake = 0.0
         self.weapon_t = 0.0
@@ -407,15 +457,21 @@ class Game:
     def _respawn_items(self):
         self.items = []
         free_spots = []
-        for gy in range(self.world.h):
-            for gx in range(self.world.w):
-                if not self.world.is_wall(gx, gy):
-                    if math.hypot(gx+0.5 - self.player.x, gy+0.5 - self.player.y) > 2.0:
-                        free_spots.append((gx + 0.5, gy + 0.5))
-        if not free_spots: return
-        for _ in range(4):
-            spot = random.choice(free_spots)
-            self.items.append(HealthItem(spot[0], spot[1]))
+        for y in range(self.world.h):
+            for x in range(self.world.w):
+                if not self.world.is_wall(x, y):
+                    free_spots.append((x + 0.5, y + 0.5))
+        
+        if free_spots:
+            # Respawn Kits Medicos
+            for _ in range(2 + self.level // 3):
+                spot = random.choice(free_spots)
+                self.items.append(Item(spot[0], spot[1], type="health"))
+            
+            # Respawn Granadas
+            for _ in range(1 + self.level // 4):
+                spot = random.choice(free_spots)
+                self.items.append(Item(spot[0], spot[1], type="grenade"))
             
     def _get_map_colors(self):
         themes = [
@@ -489,15 +545,31 @@ class Game:
                 prev_num_enemies = 4 + prev_lvl * 2
                 prev_hp_val = 20 + prev_lvl * 20
                 hp_val = int(3 * (prev_num_enemies * prev_hp_val))
-                self.enemies.append(Enemy(spot[0], spot[1], hp=hp_val, max_hp=hp_val, is_boss=True, scale=3.8, subtype=target_subtype))
+                self.enemies.append(Enemy(spot[0], spot[1], hp=hp_val, max_hp=hp_val, is_boss=True, scale=2.2, subtype=target_subtype))
         else:
             num_enemies = 4 + self.level * 2
             for _ in range(num_enemies):
                 if not free_spots: break
                 spot = random.choice(free_spots)
                 hp_val = 20 + self.level * 20
-                scale_val = 0.5 if target_subtype == "v2" else 1.0
+                scale_val = 0.4 if target_subtype == "v2" else 1.0
                 self.enemies.append(Enemy(spot[0], spot[1], hp=hp_val, max_hp=hp_val, subtype=target_subtype, scale=scale_val))
+
+        self.player_has_key = False
+        self.key_pos = None
+        
+        # Posicionar Portal
+        free_spots = []
+        for gy in range(self.world.h):
+            for gx in range(self.world.w):
+                if not self.world.is_wall(gx, gy):
+                    dist = math.hypot(gx + 0.5 - self.player.x, gy + 0.5 - self.player.y)
+                    if dist > 6.0:
+                        free_spots.append((gx + 0.5, gy + 0.5))
+        if free_spots:
+            self.portal_pos = random.choice(free_spots)
+        else:
+            self.portal_pos = (self.player.x, self.player.y)
 
     def _setup_mouse(self):
         pygame.event.set_grab(self.mouse_look)
@@ -519,14 +591,23 @@ class Game:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit(); sys.exit()
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
-                self._next_level()
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE: sys.exit()
-                if event.key == pygame.K_TAB: self.toggle_mouse()
+                if event.key == pygame.K_m: self.toggle_mouse()
+                if event.key == pygame.K_1: self.player.weapon_idx = 0
+                if event.key == pygame.K_2 and self.level >= 4: self.player.weapon_idx = 1
+                if event.key == pygame.K_TAB: self._use_medkit()
+                if event.key == pygame.K_SPACE: self._throw_grenade()
+                if event.key == pygame.K_RETURN: self._next_level()
                 if event.key == pygame.K_r: self.player.ammo = min(200, self.player.ammo + 25)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 self._fire()
+
+    def _use_medkit(self):
+        if self.player.hp < 150 and self.player.medkits > 0:
+            self.player.medkits -= 1
+            self.player.hp = min(150, self.player.hp + 30)
+            self.heal_flash = 1.0
 
     def _update(self, dt: float):
         keys = pygame.key.get_pressed()
@@ -534,6 +615,15 @@ class Game:
         self.level_msg_timer = max(0.0, self.level_msg_timer - dt)
         self.wep_msg_timer = max(0.0, self.wep_msg_timer - dt)
         self.headshot_msg_timer = max(0.0, self.headshot_msg_timer - dt)
+
+        # Atualizar Partículas
+        for p in self.particles[:]:
+            p.life -= dt
+            p.vz += 10.0 * dt # Gravidade
+            p.z += p.vz * dt
+            p.x += p.vx * dt
+            p.y += p.vy * dt
+            if p.life <= 0 or p.z > 0.6: self.particles.remove(p)
 
         # Atualizar Projéteis
         for p in self.projectiles[:]:
@@ -551,8 +641,7 @@ class Game:
                     if p in self.projectiles: self.projectiles.remove(p)
 
         alive_count = sum(1 for e in self.enemies if e.state != "dying" and e.alive)
-        if alive_count == 0 and self.player.hp > 0:
-            self._next_level()
+        # self._next_level() removido para usar o sistema de Portal e Chave
 
         if self.mouse_look:
             mx, my = pygame.mouse.get_rel()
@@ -592,6 +681,27 @@ class Game:
         self.fire_flash = max(0.0, self.fire_flash - dt * 3.5)
         self.hit_marker = max(0.0, self.hit_marker - dt * 8.0)
         self.heal_flash = max(0.0, self.heal_flash - dt * 3.0)
+        self.grenade_throw_anim = max(0.0, self.grenade_throw_anim - dt)
+
+        self._update_grenades(dt)
+
+        # Animacao do Portal
+        self.portal_timer += dt
+        if self.portal_timer > 0.1:
+            self.portal_timer = 0
+            self.portal_frame = (self.portal_frame + 1) % len(self.tex_portal)
+
+        # Coleta de Chave
+        if self.key_pos:
+            if math.hypot(self.player.x - self.key_pos[0], self.player.y - self.key_pos[1]) < 0.8:
+                self.player_has_key = True
+                self.key_pos = None
+
+        # Colisao Portal
+        if self.portal_pos:
+            if math.hypot(self.player.x - self.portal_pos[0], self.player.y - self.portal_pos[1]) < 0.6:
+                if self.player_has_key:
+                    self._next_level()
 
         for p in self.particles[:]:
             p.x += p.vx * dt
@@ -609,11 +719,19 @@ class Game:
                 it.timer -= dt
                 if it.timer <= 0: it.active = True
             else:
-                if math.hypot(it.x - px, it.y - py) < 0.6 and self.player.hp < 150:
-                    self.player.hp = min(150, self.player.hp + 30)
+                if math.hypot(it.x - px, it.y - py) < 0.6:
+                    if it.type == "health":
+                        if self.player.hp < 150:
+                            self.player.hp = min(150, self.player.hp + 30)
+                            self.heal_flash = 1.0 
+                        else:
+                            self.player.medkits += 1
+                            self.heal_flash = 0.5 
+                    elif it.type == "grenade":
+                        self.player.grenades += 1
+                        self.heal_flash = 0.5
                     it.active = False
                     it.timer = 20.0
-                    self.heal_flash = 1.0 
 
         for e in self.enemies:
             if not e.alive: continue
@@ -625,6 +743,10 @@ class Game:
                     e.frame += 1
                     if e.frame >= len(self.tex_death_frames):
                         e.alive = False
+                        # Se for um boss OU se for o último inimigo do nível, dropa a chave
+                        alive_rem = sum(1 for en in self.enemies if en.alive and en.state != "dying")
+                        if e.is_boss or alive_rem == 0:
+                            self.key_pos = (e.x, e.y)
                 continue
 
             e.cooldown = max(0.0, e.cooldown - dt)
@@ -657,7 +779,7 @@ class Game:
                     if not self.world.is_blocked(nx, e.y): e.x = nx
                     elif not self.world.is_blocked(e.x, ny): e.y = ny
 
-            atk_dist = 8.5 if e.is_boss else 6.5
+            atk_dist = 4.5 if e.is_boss else 2.2
             if dist < atk_dist and e.cooldown <= 0.0 and line_of_sight(self.world, e.x, e.y, px, py):
                 # Habilidade Especial Boss nlv2: Tiro de Energia
                 if e.is_boss and e.subtype == "v2" and dist > 3.0:
@@ -677,8 +799,14 @@ class Game:
             self._next_level()
             self.shake = self.fire_flash = 0.0
 
+    def _use_medkit(self):
+        if self.player.medkits > 0 and self.player.hp < 150:
+            self.player.medkits -= 1
+            self.player.hp = min(150, self.player.hp + 30)
+            self.heal_flash = 1.0
+
     def _fire(self):
-        is_shotgun = self.level >= 4
+        is_shotgun = self.player.weapon_idx == 1
         ammo_cost = 2 if is_shotgun else 1
         
         if self.player.ammo < ammo_cost: return
@@ -705,13 +833,15 @@ class Game:
             if abs(rel_ang) <= tolerance:
                 size = (self.H / dist)
                 hh = size * 0.7 * e.scale
-                top = self.H / 2 - hh / 2 + sy_curr + self.pitch
+                # Hitbox agora acompanha o inimigo no chão
+                top = (self.H + size) // 2 + sy_curr + self.pitch - hh
                 bottom = top + hh
                 
                 if top <= self.mira_y <= bottom:
                     if line_of_sight(self.world, px, py, e.x, e.y):
                         if dist < best_dist:
                             best, best_dist = e, dist
+                            # Headshot é o topo (cabeca) do sprite
                             best_headshot = self.mira_y <= top + hh * 0.25
 
         if best:
@@ -729,7 +859,8 @@ class Game:
             self.hit_marker = 1.0
             p_count = 24 if best_headshot else 8
             for _ in range(p_count):
-                self.particles.append(Particle(best.x, best.y, -0.2, (random.random()-0.5)*2, (random.random()-0.5)*2, -random.random()*2, 1.0))
+                # x, y, z, vx, vy, vz, color, life
+                self.particles.append(Particle(best.x, best.y, 0.0, (random.random()-0.5)*2, (random.random()-0.5)*2, -random.random()*3, (200, 0, 0), 1.0))
             if best.hp <= 0:
                 best.state = "dying"
                 best.frame = 0
@@ -812,6 +943,13 @@ class Game:
             self.screen.blit(scale_strip, (x0, y0))
 
         sprites = [(math.hypot(e.x-px, e.y-py), e.x, e.y, e) for e in self.enemies if e.alive]
+        if self.key_pos:
+            sprites.append((math.hypot(self.key_pos[0]-px, self.key_pos[1]-py), self.key_pos[0], self.key_pos[1], "key"))
+        if self.portal_pos:
+            sprites.append((math.hypot(self.portal_pos[0]-px, self.portal_pos[1]-py), self.portal_pos[0], self.portal_pos[1], "portal"))
+        for g in self.grenades_list:
+            sprites.append((math.hypot(g.x-px, g.y-py), g.x, g.y, "grenade_proj"))
+        
         sprites += [(math.hypot(p.x-px, p.y-py), p.x, p.y, p) for p in self.particles]
         sprites += [(math.hypot(p.x-px, p.y-py), p.x, p.y, p) for p in self.projectiles]
         sprites += [(math.hypot(it.x-px, it.y-py), it.x, it.y, it) for it in self.items if it.active]
@@ -823,8 +961,9 @@ class Game:
 
             pt_x = (0.5 + rel / self.fov) * self.W + sx
             size = (self.H / dist)
-            if isinstance(obj, (Enemy, HealthItem)):
+            if isinstance(obj, (Enemy, Item)) or obj in ("key", "portal", "grenade_proj"):
                 if isinstance(obj, Enemy):
+                    scale = obj.scale
                     if obj.state == "dying":
                         f_idx = min(obj.frame, max(0, len(self.tex_death_frames) - 1))
                         tex = self.tex_death_frames[f_idx]
@@ -834,16 +973,33 @@ class Game:
                     else:
                         f_idx = obj.frame % max(1, len(self.tex_enemy_frames))
                         tex = self.tex_enemy_frames[f_idx]
-                else:
-                    tex = self.tex_medkit
-
-                scale = obj.scale if isinstance(obj, Enemy) else 1.0
+                elif isinstance(obj, Item):
+                    tex = self.tex_medkit if obj.type == "health" else self.tex_grenade
+                    scale = 0.8 if obj.type == "grenade" else 1.0
+                elif obj == "key":
+                    tex = self.tex_key
+                    scale = 0.5
+                elif obj == "portal":
+                    f_idx = self.portal_frame % len(self.tex_portal)
+                    tex = self.tex_portal[f_idx] if self.player_has_key else self.tex_portal_red[f_idx]
+                    scale = 2.0
+                elif obj == "grenade_proj":
+                    # Usa o mesmo sprite da granada mas leva em conta a altura no ar
+                    tex = self.tex_grenade
+                    scale = 0.4
+                    # Pega o objeto grenade real para usar o Z
+                    g_obj = next((g for g in self.grenades_list if g.x == ex and g.y == ey), None)
+                    z_off = (g_obj.z - 0.5) if g_obj else 0
+                
                 hw, hh = size * 0.7 * scale, size * 0.7 * scale
                 if hw < 1 or hh < 1: continue
-                top, left = self.H / 2 - hh / 2 + sy + self.pitch, pt_x - hw / 2
-                
-                if isinstance(obj, HealthItem):
-                    top += size * 0.15
+                # Posiciona o sprite no chão ao invés de centralizado no horizonte
+                # Se for granada voadora, adiciona o deslocamento Z
+                top = (self.H + size) // 2 + sy + self.pitch - hh + (size * 0.05)
+                if obj == "grenade_proj":
+                    top += z_off * size
+                left = pt_x - hw / 2
+
 
                 x_start, x_end = int(left), int(left + hw)
                 
@@ -909,8 +1065,61 @@ class Game:
 
         pygame.display.flip()
 
+    def _throw_grenade(self):
+        if self.player.grenades > 0 and self.grenade_throw_anim <= 0:
+            self.player.grenades -= 1
+            self.grenade_throw_anim = 0.6
+            spd = 8.0
+            vx = math.cos(self.player.ang) * spd
+            vy = math.sin(self.player.ang) * spd
+            # z = -0.2 (mão), vz = -3.0 (arco mais baixo)
+            self.grenades_list.append(Grenade(self.player.x, self.player.y, -0.2, vx, vy, -3.0, fuse=1.5))
+
+    def _update_grenades(self, dt):
+        for g in self.grenades_list[:]:
+            g.fuse -= dt
+            # Gravidade e movimento vertical
+            g.vz += 15.0 * dt
+            g.z += g.vz * dt
+            
+            # Quicar no chão
+            if g.z > 0.5:
+                g.z = 0.5
+                g.vz *= -0.4 # Perde energia ao quicar
+                g.vx *= 0.8  # Atrito no chão
+                g.vy *= 0.8
+            
+            # Movimento horizontal e colisão com paredes
+            nx, ny = g.x + g.vx * dt, g.y + g.vy * dt
+            if self.world.is_wall(int(nx), int(g.y)): g.vx *= -0.6
+            else: g.x = nx
+            if self.world.is_wall(int(g.x), int(ny)): g.vy *= -0.6
+            else: g.y = ny
+            
+            g.vx *= 0.98; g.vy *= 0.98
+            if g.fuse <= 0:
+                self._explode(g.x, g.y)
+                self.grenades_list.remove(g)
+
+    def _explode(self, ex, ey):
+        radius = 3.5
+        damage = 300
+        for e in self.enemies:
+            if e.alive:
+                d = math.hypot(e.x-ex, e.y-ey)
+                if d < radius:
+                    e.hp -= damage * (1.0 - d/radius)
+                    if e.hp <= 0: e.state = "dying"; e.frame = 0
+                    self.hit_marker = 0.5
+        for _ in range(30):
+            ang = random.random()*math.pi*2
+            spd = random.uniform(2,8)
+            # x, y, z, vx, vy, vz, color, life
+            self.particles.append(Particle(ex, ey, 0.5, math.cos(ang)*spd, math.sin(ang)*spd, -random.uniform(3,7), (255, random.randint(50,150), 0), 1.2))
+        self.shake = 1.8
+
     def _draw_weapon(self, bob, sx, sy):
-        if self.level <= 3:
+        if self.player.weapon_idx == 0:
             tex_idle, tex_shoot = self.p_idle, self.p_shoot
         else:
             tex_idle, tex_shoot = self.s_idle, self.s_shoot
@@ -927,8 +1136,8 @@ class Game:
         bx = int(math.cos(self.weapon_t) * 15)
         by = int(bob * 10)
         
-        # Offset diferente para a espingarda (mais à direita) versus pistola
-        offset_x = -60 if self.level <= 3 else -20
+        # Posicionamento lateral: Pistola mais à esquerda, Shotgun mais à direita
+        offset_x = -60 if self.player.weapon_idx == 0 else -20
         x = (self.W - target_w) // 2 + bx + sx + offset_x
         
         # Reduzido o offset de 70 para 50 para mover mais para cima
@@ -937,23 +1146,58 @@ class Game:
         scaled_tex = pygame.transform.scale(tex, (int(target_w), int(target_h)))
         self.screen.blit(scaled_tex, (int(x), int(y)))
 
+        
     def _draw_hud(self):
-        txt = f"LEVEL {self.level} | HP {self.player.hp:3d} | MUNI {self.player.ammo:3d} | DEMONIOS {sum(1 for e in self.enemies if e.alive and e.state != 'dying')}"
-        surf = self.font.render(txt, True, (255, 50, 50) if self.player.hp <= 30 else (230, 230, 230))
-        self.screen.blit(surf, (20, self.H - 30))
+        # Fundo do HUD semi-transparente
+        hud_surface = pygame.Surface((self.W, 100), pygame.SRCALPHA)
+        hud_surface.fill((0, 0, 0, 150))
+        self.screen.blit(hud_surface, (0, self.H - 100))
         
-        # Desenha o icone da arma no canto da tela
-        icon = self.p_icon if self.level <= 3 else self.s_icon
-        orig_w, orig_h = icon.get_size()
-        if orig_h > 0 and orig_w > 0:
-            target_icon_h = min(64, self.H // 8)
-            target_icon_w = orig_w * (target_icon_h / orig_h)
-            scaled_icon = pygame.transform.scale(icon, (int(target_icon_w), int(target_icon_h)))
-            self.screen.blit(scaled_icon, (self.W - target_icon_w - 20, self.H - target_icon_h - 20))
+        # --- BARRA DE VIDA (PREMIUM) ---
+        hp_x, hp_y = 30, self.H - 70
+        hp_w, hp_h = 250, 25
+        pygame.draw.rect(self.screen, (50, 50, 50), (hp_x, hp_y, hp_w, hp_h), border_radius=5)
+        hp_color = (40, 200, 40) if self.player.hp > 60 else (200, 200, 40) if self.player.hp > 30 else (200, 40, 40)
+        hp_perc = max(0, min(1.0, self.player.hp / 150.0))
+        pygame.draw.rect(self.screen, hp_color, (hp_x+2, hp_y+2, int((hp_w-4)*hp_perc), hp_h-4), border_radius=4)
         
-        if self.level_msg_timer > 0 and self.level % 5 != 0:
-            msg = self.big_font.render(f"NÍVEL {self.level}", True, (255, 215, 0))
-            self.screen.blit(msg, (self.W//2 - msg.get_width()//2, self.H//4))
+        hp_text = self.font.render(f"HP: {int(self.player.hp)}", True, (255, 255, 255))
+        self.screen.blit(hp_text, (hp_x + 10, hp_y - 25))
+
+        # --- ITENS E MUNIÇÃO (CONTAGEM) ---
+        items_x = self.W - 350
+        
+        def draw_stat(icon_tex, val, x_off, color=(255,255,255)):
+            icon_s = pygame.transform.scale(icon_tex, (32, 32))
+            self.screen.blit(icon_s, (items_x + x_off, self.H - 75))
+            txt = self.font.render(str(val), True, color)
+            self.screen.blit(txt, (items_x + x_off + 40, self.H - 65))
+
+        draw_stat(self.tex_medkit, self.player.medkits, 0, (100, 255, 100))
+        draw_stat(self.tex_grenade, self.player.grenades, 100, (200, 200, 100))
+        
+        ammo_txt = self.font.render(f"AMMO: {self.player.ammo}", True, (255, 215, 0))
+        self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
+
+        # --- OUTROS AVISOS ---
+        if self.player_has_key:
+            msg = self.font.render("CHAVE COLETADA! VÁ AO PORTAL", True, (255, 255, 0))
+            self.screen.blit(msg, (self.W//2 - msg.get_width()//2, 50))
+            
+        icon = self.p_icon if self.player.weapon_idx == 0 else self.s_icon
+        self.screen.blit(pygame.transform.scale(icon, (64, 64)), (self.W - 80, self.H - 140))
+
+        # --- ANIMAÇÃO DE ARREMESSO (MÃO) ---
+        if self.grenade_throw_anim > 0:
+            t = self.grenade_throw_anim
+            # Braço subindo do canto da tela
+            arm_y = self.H - (t * self.H * 0.8)
+            arm_x = self.W // 2 + 50
+            # Desenha um braço procedural
+            pygame.draw.ellipse(self.screen, (100, 80, 60), (arm_x, arm_y, 80, 200))
+            # Grenada na mão
+            pygame.draw.circle(self.screen, (80, 100, 60), (arm_x + 30, arm_y + 20), 15)
+            pygame.draw.circle(self.screen, (150, 150, 150), (arm_x + 40, arm_y + 10), 6, 2)
 
         if self.wep_msg_timer > 0:
             font = pygame.font.SysFont('Arial', 48, bold=True)
