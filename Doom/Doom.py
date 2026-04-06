@@ -268,19 +268,23 @@ def generate_textures():
     pygame.draw.rect(medkit_tex, (200, 30, 30), (24, 32, 16, 8))
     pygame.draw.rect(medkit_tex, (100, 100, 100), (24, 18, 16, 6))
 
-    def load_wep(idle_f, shoot_f):
+    def load_wep(idle_f, shoot_f, icon_f):
         try:
             idle = pygame.image.load(os.path.join(img_dir, idle_f)).convert_alpha()
             shoot = pygame.image.load(os.path.join(img_dir, shoot_f)).convert_alpha()
-            return idle, shoot
         except:
-            s = pygame.Surface((240, 240), pygame.SRCALPHA)
-            return s, s
+            idle = pygame.Surface((240, 240), pygame.SRCALPHA)
+            shoot = pygame.Surface((240, 240), pygame.SRCALPHA)
+        try:
+            icon = pygame.image.load(os.path.join(img_dir, icon_f)).convert_alpha()
+        except:
+            icon = pygame.Surface((64, 32), pygame.SRCALPHA)
+        return idle, shoot, icon
 
-    p_idle, p_shoot = load_wep("pistolIdle.png", "pistolShooting.png")
-    s_idle, s_shoot = load_wep("ShootGunIdle.png", "ShootGunShotting.png")
+    p_idle, p_shoot, p_icon = load_wep("PistolIdle.png", "PistolShotting.png", "PistolPrint.png")
+    s_idle, s_shoot, s_icon = load_wep("ShotgunIdle.png", "ShotgunShotting.png", "ShotgunPrint.png")
 
-    return (wall_tex, tex_enemy_frames, tex_boss_frames, tex_death_frames, medkit_tex, p_idle, p_shoot, s_idle, s_shoot, floor_tex, ceiling_tex,
+    return (wall_tex, tex_enemy_frames, tex_boss_frames, tex_death_frames, medkit_tex, p_idle, p_shoot, p_icon, s_idle, s_shoot, s_icon, floor_tex, ceiling_tex,
             wall_tex_jungle, tex_enemy_v2_frames, tex_boss_v2_frames, floor_tex_jungle, ceiling_tex_jungle)
 
 class Game:
@@ -298,7 +302,7 @@ class Game:
         self.fov = math.radians(66)
         
         (self.tex_wall_def, self.tex_enemy_def, self.tex_boss_def, self.tex_death_frames, self.tex_medkit, 
-         self.p_idle, self.p_shoot, self.s_idle, self.s_shoot, self.tex_floor_def, self.tex_ceiling_def,
+         self.p_idle, self.p_shoot, self.p_icon, self.s_idle, self.s_shoot, self.s_icon, self.tex_floor_def, self.tex_ceiling_def,
          self.tex_wall_jungle, self.tex_enemy_v2, self.tex_boss_v2, self.tex_floor_jungle, self.tex_ceiling_jungle) = generate_textures()
         
         self.tex_wall = self.tex_wall_def
@@ -579,7 +583,11 @@ class Game:
             move = move.normalize() * speed * dt
             self.player.x, self.player.y = try_move(self.world, self.player.x, self.player.y, self.player.x + move.x, self.player.y + move.y, self.player_radius)
 
-        self.weapon_t += dt * (6.0 if move.length_squared() > 0 else 2.0)
+        if move.length_squared() > 0:
+            self.weapon_t += dt * 6.0
+        else:
+            self.weapon_t = 0.0 # Reseta a animação ao parar
+
         self.shake = max(0.0, self.shake - dt * 6.0)
         self.fire_flash = max(0.0, self.fire_flash - dt * 3.5)
         self.hit_marker = max(0.0, self.hit_marker - dt * 8.0)
@@ -909,20 +917,22 @@ class Game:
             
         tex = tex_shoot if self.fire_flash > 0.1 else tex_idle
         
-        if self.moving_right:
-            tex = pygame.transform.flip(tex, True, False)
-            
         orig_w, orig_h = tex.get_size()
         if orig_h == 0: orig_h = 1
         
-        target_h = self.H * 0.7
+        # Reduzido de 0.7 para 0.5 para deixar a arma menor
+        target_h = self.H * 0.5 
         target_w = orig_w * (target_h / orig_h)
         
         bx = int(math.cos(self.weapon_t) * 15)
         by = int(bob * 10)
         
-        x = (self.W - target_w) // 2 + bx + sx
-        y = self.H - target_h + by + 20 + sy
+        # Offset diferente para a espingarda (mais à direita) versus pistola
+        offset_x = -60 if self.level <= 3 else -20
+        x = (self.W - target_w) // 2 + bx + sx + offset_x
+        
+        # Reduzido o offset de 70 para 50 para mover mais para cima
+        y = self.H - target_h + by + 50 + sy 
         
         scaled_tex = pygame.transform.scale(tex, (int(target_w), int(target_h)))
         self.screen.blit(scaled_tex, (int(x), int(y)))
@@ -931,6 +941,15 @@ class Game:
         txt = f"LEVEL {self.level} | HP {self.player.hp:3d} | MUNI {self.player.ammo:3d} | DEMONIOS {sum(1 for e in self.enemies if e.alive and e.state != 'dying')}"
         surf = self.font.render(txt, True, (255, 50, 50) if self.player.hp <= 30 else (230, 230, 230))
         self.screen.blit(surf, (20, self.H - 30))
+        
+        # Desenha o icone da arma no canto da tela
+        icon = self.p_icon if self.level <= 3 else self.s_icon
+        orig_w, orig_h = icon.get_size()
+        if orig_h > 0 and orig_w > 0:
+            target_icon_h = min(64, self.H // 8)
+            target_icon_w = orig_w * (target_icon_h / orig_h)
+            scaled_icon = pygame.transform.scale(icon, (int(target_icon_w), int(target_icon_h)))
+            self.screen.blit(scaled_icon, (self.W - target_icon_w - 20, self.H - target_icon_h - 20))
         
         if self.level_msg_timer > 0 and self.level % 5 != 0:
             msg = self.big_font.render(f"NÍVEL {self.level}", True, (255, 215, 0))
