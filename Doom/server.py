@@ -14,10 +14,17 @@ async def handler(websocket, path):
             # Quando um jogador entra na sala
             if data["type"] == "join":
                 room_id = data["room"]
+                p_id = data.get("id", "??")
                 if room_id not in rooms:
                     rooms[room_id] = []
+                
+                # Avisar quem já está na sala que alguém novo entrou
+                msg_join = json.dumps({"type": "player_joined", "id": p_id})
+                for client in rooms[room_id]:
+                    await client.send(msg_join)
+                    
                 rooms[room_id].append(websocket)
-                print(f"Jogador entrou na sala: {room_id}")
+                print(f"Jogador {p_id} entrou na sala: {room_id}")
 
             # Repassa QUALQUER mensagem da sala para os outros jogadores
             elif room_id:

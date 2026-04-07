@@ -655,60 +655,72 @@ class Game:
             traceback.print_exc()
 
     async def network_loop(self):
-        """Loop de rede em segundo plano"""
-        print(f"Iniciando loop de rede para sala: {self.room_code}")
-        # URL do servidor oficial no Render
-        uri = "wss://doom-multiplayer.onrender.com" 
+        """Loop de rede ultra-compatível (JS Bridge)"""
+        uri = "wss://doom-multiplayer.onrender.com"
         try:
             import platform
-            # Tenta importar websockets (pode precisar de micropip no browser)
-            try:
-                import websockets
-            except ImportError:
-                print("Websockets não disponível localmente. Usando simulação ou JS Bridge.")
-                return
-
-            async with websockets.connect(uri) as websocket:
-                self.ws = websocket
-                # Enviar comando de entrada
-                await websocket.send(json.dumps({
-                    "type": "join",
-                    "room": self.room_code,
-                    "id": self.player_id
-                }))
+            if platform.system() == 'Emscripten':
+                from platform import window
+                # Criar WebSocket e Fila de mensagens no JS
+                self.ws = window.WebSocket.new(uri)
+                window.eval("window.doom_msg_queue = [];")
+                self.ws.onmessage = window.eval("(event) => { window.doom_msg_queue.push(event.data); }")
                 
-                async for message in websocket:
-                    data = json.loads(message)
-                    if data["type"] == "pos":
-                        p_id = data.get("id")
-                        if p_id and p_id != self.player_id:
-                            self.other_players[p_id] = {
-                                "x": data["x"],
-                                "y": data["y"],
-                                "ang": data["ang"]
-                            }
-                    elif data["type"] == "start":
-                        print("Sinal de início recebido!")
-                        self.game_state = "PLAY"
-                        if self.mouse_look: self._setup_mouse()
+                # Callback de conexão aberta
+                on_open_msg = json.dumps({"type": "join", "room": self.room_code, "id": self.player_id})
+                self.ws.onopen = window.eval(f"(e) => {{ e.target.send('{on_open_msg}'); }}")
+                
+                while True:
+                    # Checar se há mensagens na fila do JS
+                    q_len = int(window.eval("window.doom_msg_queue.length"))
+                    for _ in range(q_len):
+                        msg_str = str(window.eval("window.doom_msg_queue.shift()"))
+                        self._process_network_data(json.loads(msg_str))
+                    await asyncio.sleep(0.05)
+            else:
+                import websockets
+                async with websockets.connect(uri) as websocket:
+                    self.ws = websocket
+                    await websocket.send(json.dumps({"type": "join", "room": self.room_code, "id": self.player_id}))
+                    async for message in websocket:
+                        self._process_network_data(json.loads(message))
         except Exception as e:
-            print(f"Erro de conexão: {e}")
+            print(f"Erro rede: {e}")
             self.ws = None
+
+    def _process_network_data(self, data):
+        """Processa as mensagens que chegam do servidor"""
+        if data["type"] == "pos":
+            p_id = data.get("id")
+            if p_id and p_id != self.player_id:
+                self.other_players[p_id] = {
+                    "x": data["x"], "y": data["y"], "ang": data["ang"]
+                }
+        elif data["type"] == "player_joined":
+            p_id = data.get("id")
+            if p_id and p_id != self.player_id:
+                print(f"Novo sinal de jogador: {p_id}")
+                if p_id not in self.other_players:
+                    self.other_players[p_id] = {"x": 1.5, "y": 1.5, "ang": 0}
+        elif data["type"] == "start":
+            print("Partida iniciada pelo Host!")
+            self.game_state = "PLAY"
+            if self.mouse_look: self._setup_mouse()
 
     def _send_pos(self):
         """Envia posição atual para o servidor"""
-        if hasattr(self, 'ws') and self.ws:
+        if self.ws:
             try:
                 msg = json.dumps({
-                    "type": "pos",
-                    "room": self.room_code,
-                    "id": self.player_id,
-                    "x": self.player.x,
-                    "y": self.player.y,
-                    "ang": self.player.ang
+                    "type": "pos", "room": self.room_code, "id": self.player_id,
+                    "x": self.player.x, "y": self.player.y, "ang": self.player.ang
                 })
-                # Criar tarefa para não travar o game loop
-                asyncio.create_task(self.ws.send(msg))
+                # No JS (Navegador), send é síncrono
+                import platform
+                if platform.system() == 'Emscripten':
+                    self.ws.send(msg)
+                else:
+                    asyncio.create_task(self.ws.send(msg))
             except:
                 pass
 
@@ -802,7 +814,13 @@ class Game:
         self.screen.blit(code_msg, (self.W//2 - code_msg.get_width()//2, 120))
         
         status = self.font.render("AGUARDANDO JOGADORES...", True, (200, 200, 200))
-        self.screen.blit(status, (self.W//2 - status.get_width()//2, 250))
+        self.screen.blit(status, (self.W//2 - status.get_width()//2, 230))
+
+        # Mostrar contagem de jogadores
+        count = len(self.other_players) + 1
+        players_txt = self.font.render(f"JOGADORES CONECTADOS: {count}", True, (0, 255, 0))
+        self.screen.blit(players_txt, (self.W//2 - players_txt.get_width()//2, 300))
+        
         
         if self.is_host:
             btn = self.font.render("[ PRESSIONE ENTER PARA INICIAR PARTIDA ]", True, (255, 255, 255))
