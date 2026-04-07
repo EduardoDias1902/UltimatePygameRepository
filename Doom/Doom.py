@@ -947,8 +947,10 @@ class Game:
             sprites.append((math.hypot(self.key_pos[0]-px, self.key_pos[1]-py), self.key_pos[0], self.key_pos[1], "key"))
         if self.portal_pos:
             sprites.append((math.hypot(self.portal_pos[0]-px, self.portal_pos[1]-py), self.portal_pos[0], self.portal_pos[1], "portal"))
+        
+        # Adicionar as Granadas Voadoras
         for g in self.grenades_list:
-            sprites.append((math.hypot(g.x-px, g.y-py), g.x, g.y, "grenade_proj"))
+            sprites.append((math.hypot(g.x-px, g.y-py), g.x, g.y, g))
         
         sprites += [(math.hypot(p.x-px, p.y-py), p.x, p.y, p) for p in self.particles]
         sprites += [(math.hypot(p.x-px, p.y-py), p.x, p.y, p) for p in self.projectiles]
@@ -961,7 +963,7 @@ class Game:
 
             pt_x = (0.5 + rel / self.fov) * self.W + sx
             size = (self.H / dist)
-            if isinstance(obj, (Enemy, Item)) or obj in ("key", "portal", "grenade_proj"):
+            if isinstance(obj, (Enemy, Item, Grenade)) or obj in ("key", "portal"):
                 if isinstance(obj, Enemy):
                     scale = obj.scale
                     if obj.state == "dying":
@@ -976,6 +978,10 @@ class Game:
                 elif isinstance(obj, Item):
                     tex = self.tex_medkit if obj.type == "health" else self.tex_grenade
                     scale = 0.8 if obj.type == "grenade" else 1.0
+                elif isinstance(obj, Grenade):
+                    tex = self.tex_grenade
+                    scale = 0.4
+                    z_off = (obj.z - 0.5)
                 elif obj == "key":
                     tex = self.tex_key
                     scale = 0.5
@@ -983,20 +989,13 @@ class Game:
                     f_idx = self.portal_frame % len(self.tex_portal)
                     tex = self.tex_portal[f_idx] if self.player_has_key else self.tex_portal_red[f_idx]
                     scale = 2.0
-                elif obj == "grenade_proj":
-                    # Usa o mesmo sprite da granada mas leva em conta a altura no ar
-                    tex = self.tex_grenade
-                    scale = 0.4
-                    # Pega o objeto grenade real para usar o Z
-                    g_obj = next((g for g in self.grenades_list if g.x == ex and g.y == ey), None)
-                    z_off = (g_obj.z - 0.5) if g_obj else 0
                 
                 hw, hh = size * 0.7 * scale, size * 0.7 * scale
                 if hw < 1 or hh < 1: continue
                 # Posiciona o sprite no chão ao invés de centralizado no horizonte
                 # Se for granada voadora, adiciona o deslocamento Z
                 top = (self.H + size) // 2 + sy + self.pitch - hh + (size * 0.05)
-                if obj == "grenade_proj":
+                if isinstance(obj, Grenade):
                     top += z_off * size
                 left = pt_x - hw / 2
 
@@ -1163,6 +1162,10 @@ class Game:
         
         hp_text = self.font.render(f"HP: {int(self.player.hp)}", True, (255, 255, 255))
         self.screen.blit(hp_text, (hp_x + 10, hp_y - 25))
+
+        # --- NÍVEL DO MAPA ---
+        lvl_text = self.font.render(f"NÍVEL: {self.level}", True, (255, 255, 0))
+        self.screen.blit(lvl_text, (hp_x + 120, hp_y - 25))
 
         # --- ITENS E MUNIÇÃO (CONTAGEM) ---
         items_x = self.W - 350
