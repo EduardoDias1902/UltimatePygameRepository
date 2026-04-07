@@ -657,8 +657,8 @@ class Game:
     async def network_loop(self):
         """Loop de rede em segundo plano"""
         print(f"Iniciando loop de rede para sala: {self.room_code}")
-        # URL do servidor no Render (substituir após deploy)
-        uri = "ws://localhost:8080" 
+        # URL do servidor oficial no Render
+        uri = "wss://doom-multiplayer.onrender.com" 
         try:
             import platform
             # Tenta importar websockets (pode precisar de micropip no browser)
@@ -687,6 +687,10 @@ class Game:
                                 "y": data["y"],
                                 "ang": data["ang"]
                             }
+                    elif data["type"] == "start":
+                        print("Sinal de início recebido!")
+                        self.game_state = "PLAY"
+                        if self.mouse_look: self._setup_mouse()
         except Exception as e:
             print(f"Erro de conexão: {e}")
             self.ws = None
@@ -898,6 +902,12 @@ class Game:
                     if event.key == pygame.K_ESCAPE:
                         self.game_state = "CUSTOM_ROOM"
                     if event.key == pygame.K_RETURN and self.is_host:
+                        # Enviar comando de início para os outros na sala
+                        if hasattr(self, 'ws') and self.ws:
+                            asyncio.create_task(self.ws.send(json.dumps({
+                                "type": "start",
+                                "room": self.room_code
+                            })))
                         self.game_state = "PLAY"
                         if self.mouse_look: self._setup_mouse()
 

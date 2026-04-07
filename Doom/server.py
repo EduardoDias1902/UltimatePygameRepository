@@ -19,10 +19,9 @@ async def handler(websocket, path):
                 rooms[room_id].append(websocket)
                 print(f"Jogador entrou na sala: {room_id}")
 
-            # Quando um jogador envia sua posição, repassa para os outros na mesma sala
-            elif data["type"] == "pos" and room_id:
+            # Repassa QUALQUER mensagem da sala para os outros jogadores
+            elif room_id:
                 if room_id in rooms:
-                    # Enviar para todos na sala, exceto para quem enviou
                     message_to_send = json.dumps(data)
                     for client in rooms[room_id]:
                         if client != websocket:
