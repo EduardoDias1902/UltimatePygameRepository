@@ -38,9 +38,11 @@ async def handler(websocket, path):
         print("Jogador desconectado")
 
 async def main():
-    # Roda o servidor na porta 8080
-    async with websockets.serve(handler, "0.0.0.0", 8080):
-        print("Servidor de Doom Multiplayer rodando na porta 8080...")
+    import os
+    # O Render exige que usemos a porta da variável de ambiente PORT
+    port = int(os.environ.get("PORT", 8080))
+    async with websockets.serve(handler, "0.0.0.0", port):
+        print(f"Servidor de Doom Multiplayer rodando na porta {port}...")
         await asyncio.Future()  # roda para sempre
 
 if __name__ == "__main__":
