@@ -656,52 +656,59 @@ class Game:
             traceback.print_exc()
 
     async def network_loop(self):
-        """Loop de rede ultra-estável (JS Bridge v2)"""
+        """Loop de rede ultra-resistente com RE-TENTATIVA"""
         if self.network_task and not self.network_task.done():
             self.network_task.cancel()
             
         uri = "wss://doom-multiplayer.onrender.com"
-        self.net_status = "CONECTANDO..."
-        try:
-            import platform
-            if platform.system() == 'Emscripten':
-                from platform import window
-                self.ws = window.WebSocket.new(uri)
-                window.eval("window.doom_msg_queue = [];")
-                self.ws.onmessage = window.eval("(event) => { window.doom_msg_queue.push(event.data); }")
-                
-                # Garante que mandamos o JOIN mesmo se a conexão for instantânea
-                join_msg = json.dumps({"type": "join", "room": self.room_code, "id": self.player_id})
-                window.eval(f"window.doom_ws_join = '{join_msg}';")
-                self.ws.onopen = window.eval("(e) => { e.target.send(window.doom_ws_join); }")
-                
-                # Check se já abriu enquanto rodava o código acima
-                if int(self.ws.readyState) == 1:
-                    self.ws.send(join_msg)
+        
+        while True:
+            self.net_status = "ACORDANDO SERVIDOR..."
+            try:
+                import platform
+                if platform.system() == 'Emscripten':
+                    from platform import window
+                    self.ws = window.WebSocket.new(uri)
+                    window.eval("window.doom_msg_queue = [];")
+                    self.ws.onmessage = window.eval("(event) => { window.doom_msg_queue.push(event.data); }")
+                    
+                    join_msg = json.dumps({"type": "join", "room": self.room_code, "id": self.player_id})
+                    window.eval(f"window.doom_ws_join = '{join_msg}';")
+                    self.ws.onopen = window.eval("(e) => { e.target.send(window.doom_ws_join); }")
+                    
+                    # Esperar conexão ou falha (até 60s)
+                    timeout = 60
+                    while timeout > 0:
+                        state = int(self.ws.readyState)
+                        if state == 1:
+                            self.net_status = "CONECTADO"
+                            break
+                        elif state > 1:
+                            raise Exception("Link quebrado")
+                        await asyncio.sleep(1)
+                        timeout -= 1
+                    
+                    if timeout <= 0: raise Exception("Timeout")
 
-                while True:
-                    if int(self.ws.readyState) == 1:
+                    while int(self.ws.readyState) == 1:
+                        q_len = int(window.eval("window.doom_msg_queue.length"))
+                        for _ in range(q_len):
+                            msg_str = str(window.eval("window.doom_msg_queue.shift()"))
+                            self._process_network_data(json.loads(msg_str))
+                        await asyncio.sleep(0.05)
+                else:
+                    import websockets
+                    async with websockets.connect(uri) as websocket:
+                        self.ws = websocket
                         self.net_status = "CONECTADO"
-                    elif int(self.ws.readyState) > 1:
-                        self.net_status = "ERRO"
-                        
-                    q_len = int(window.eval("window.doom_msg_queue.length"))
-                    for _ in range(q_len):
-                        msg_str = str(window.eval("window.doom_msg_queue.shift()"))
-                        self._process_network_data(json.loads(msg_str))
-                    await asyncio.sleep(0.05)
-            else:
-                import websockets
-                async with websockets.connect(uri) as websocket:
-                    self.ws = websocket
-                    self.net_status = "CONECTADO"
-                    await websocket.send(json.dumps({"type": "join", "room": self.room_code, "id": self.player_id}))
-                    async for message in websocket:
-                        self._process_network_data(json.loads(message))
-        except Exception as e:
-            print(f"Erro rede: {e}")
-            self.net_status = "ERRO"
-            self.ws = None
+                        await websocket.send(json.dumps({"type": "join", "room": self.room_code, "id": self.player_id}))
+                        async for message in websocket:
+                            self._process_network_data(json.loads(message))
+            except Exception as e:
+                print(f"Tentando reconectar: {e}")
+                self.net_status = "ERR: RE-TENTANDO..."
+                await asyncio.sleep(3)
+
 
     def _process_network_data(self, data):
         """Processa as mensagens que chegam do servidor"""

@@ -5,7 +5,7 @@ import json
 # Dicionário para guardar as salas: { "código": [lista_de_conexoes] }
 rooms = {}
 
-async def handler(websocket, path):
+async def handler(websocket):
     room_id = None
     try:
         async for message in websocket:
