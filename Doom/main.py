@@ -2,7 +2,12 @@ import math
 import random
 import sys
 import os
+import asyncio
+import traceback
+import json
 from dataclasses import dataclass
+
+print("--- MAIN.PY STARTING! ---")
 
 import pygame
 
@@ -173,28 +178,36 @@ def line_of_sight(world: World, x0: float, y0: float, x1: float, y1: float) -> b
             return False
     return True
 
-def load_gif(filepath) -> list[pygame.Surface]:
+def load_anim(filepath) -> list[pygame.Surface]:
     frames = []
-    try:
-        from PIL import Image
-        img = Image.open(filepath)
-        for frame in range(getattr(img, "n_frames", 1)):
-            img.seek(frame)
-            rgba = img.convert("RGBA")
-            data = rgba.tobytes()
-            surf = pygame.image.fromstring(data, rgba.size, "RGBA")
-            frames.append(surf)
-    except Exception as e:
-        print("PIL exception on GIF:", e)
+    import os
+    img_dir = os.path.dirname(filepath)
+    base_name = os.path.splitext(os.path.basename(filepath))[0]
+    i = 0
+    while True:
+        frame_path = os.path.join(img_dir, f"{base_name}_f{i}.png")
+        if os.path.exists(frame_path):
+            try:
+                surf = pygame.image.load(frame_path).convert_alpha()
+                frames.append(surf)
+            except Exception as e:
+                print(f"Error loading {frame_path}: {e}")
+            i += 1
+        else:
+            break
     return frames
 
 def generate_textures():
     img_dir = os.path.join(os.path.dirname(__file__), "images")
+
+    # --- Wall texture (fast) ---
     wall_tex = pygame.Surface((64, 64))
-    for y in range(64):
-        for x in range(64):
-            c = random.randint(80, 140)
-            wall_tex.set_at((x, y), (c, c//2, c//3))
+    wall_tex.fill((110, 55, 35))
+    for y in range(0, 64, 16):
+        pygame.draw.line(wall_tex, (60, 30, 15), (0, y), (64, y), 2)
+    for i, x in enumerate(range(0, 64, 16)):
+        off = 8 if (i % 2) else 0
+        pygame.draw.line(wall_tex, (60, 30, 15), (x + off, 0), (x + off, 64), 2)
     for y in range(0, 64, 16):
         pygame.draw.line(wall_tex, (0,0,0), (0, y), (64, y), 2)
     for y in range(0, 64, 32):
@@ -212,70 +225,54 @@ def generate_textures():
     pygame.draw.rect(enemy_tex, (255, 255, 255), (20, 40, 24, 8), border_radius=2)
 
     gif_path = os.path.join(os.path.dirname(__file__), "images", "skeleton.gif")
-    tex_enemy_frames = load_gif(gif_path)
+    tex_enemy_frames = load_anim(gif_path)
     if not tex_enemy_frames: tex_enemy_frames = [enemy_tex]
 
     gif_boss = os.path.join(os.path.dirname(__file__), "images", "BOSS.gif")
-    tex_boss_frames = load_gif(gif_boss)
+    tex_boss_frames = load_anim(gif_boss)
     if not tex_boss_frames: tex_boss_frames = [enemy_tex]
 
     gif_death = os.path.join(os.path.dirname(__file__), "images", "Death.gif")
-    tex_death_frames = load_gif(gif_death)
+    tex_death_frames = load_anim(gif_death)
     if not tex_death_frames: tex_death_frames = [enemy_tex]
 
-    # Texturas de Chao e Teto Procedurais
+    # --- Floor/Ceiling textures (fast) ---
     floor_tex = pygame.Surface((64, 64))
-    ceiling_tex = pygame.Surface((64, 64))
-    for y in range(64):
-        for x in range(64):
-            # Padrao de Chao
-            cf = random.randint(40, 70)
-            if x % 32 < 2 or y % 32 < 2: cf = 30
-            floor_tex.set_at((x, y), (cf, cf, cf))
-            # Padrao de Teto
-            cc = random.randint(20, 40)
-            if (x+y) % 16 < 2: cc = 50
-            ceiling_tex.set_at((x, y), (cc, cc, cc+10))
+    floor_tex.fill((55, 55, 55))
+    for i in range(0, 64, 32):
+        pygame.draw.line(floor_tex, (30, 30, 30), (0, i), (64, i), 2)
+        pygame.draw.line(floor_tex, (30, 30, 30), (i, 0), (i, 64), 2)
 
-    # Texturas de Selva
+    ceiling_tex = pygame.Surface((64, 64))
+    ceiling_tex.fill((30, 30, 40))
+    for i in range(0, 64, 16):
+        pygame.draw.line(ceiling_tex, (50, 50, 60), (0, i), (64, i), 1)
+
+    # --- Jungle textures (fast) ---
     wall_tex_jungle = pygame.Surface((64, 64))
-    for y in range(64):
-        for x in range(64):
-            # Base marrom/verde para troncos e folhas
-            cg = random.randint(30, 80)
-            cb = random.randint(20, 50)
-            wall_tex_jungle.set_at((x, y), (cb, cg, cb//2))
-    # Desenhar vinhas e detalhes de madeira
-    for _ in range(15):
+    wall_tex_jungle.fill((35, 60, 25))
+    for _ in range(8):
         vx = random.randint(0, 60)
-        vy = random.randint(0, 40)
-        pygame.draw.rect(wall_tex_jungle, (20, 100, 20), (vx, vy, 4, 24), border_radius=2)
+        pygame.draw.rect(wall_tex_jungle, (20, 100, 20), (vx, 0, 4, 64))
 
     floor_tex_jungle = pygame.Surface((64, 64))
-    for y in range(64):
-        for x in range(64):
-            cg = random.randint(60, 120)
-            floor_tex_jungle.set_at((x, y), (cg // 2, cg, cg // 3))
-    for _ in range(40): # Grama
-        gx, gy = random.randint(0, 63), random.randint(0, 63)
-        pygame.draw.line(floor_tex_jungle, (20, 150, 20), (gx, gy), (gx, gy-3))
+    floor_tex_jungle.fill((40, 80, 30))
+    for _ in range(12):
+        gx, gy = random.randint(0, 63), random.randint(32, 63)
+        pygame.draw.line(floor_tex_jungle, (20, 150, 20), (gx, gy), (gx, gy - 8), 2)
 
     ceiling_tex_jungle = pygame.Surface((64, 64))
-    for y in range(64):
-        for x in range(64):
-            # Verde escuro/azul para copa
-            cc = random.randint(10, 40)
-            ceiling_tex_jungle.set_at((x, y), (cc, cc + 20, cc))
-    for _ in range(20): # Folhas no teto
+    ceiling_tex_jungle.fill((15, 35, 15))
+    for _ in range(10):
         fx, fy = random.randint(0, 63), random.randint(0, 63)
-        pygame.draw.circle(ceiling_tex_jungle, (10, 60, 10), (fx, fy), random.randint(2, 5))
+        pygame.draw.circle(ceiling_tex_jungle, (10, 60, 10), (fx, fy), 5)
 
     gif_v2 = os.path.join(os.path.dirname(__file__), "images", "Slave nvl2.gif")
-    tex_enemy_v2_frames = load_gif(gif_v2)
+    tex_enemy_v2_frames = load_anim(gif_v2)
     if not tex_enemy_v2_frames: tex_enemy_v2_frames = [enemy_tex]
 
     gif_boss_v2 = os.path.join(os.path.dirname(__file__), "images", "Boss nvl2.gif")
-    tex_boss_v2_frames = load_gif(gif_boss_v2)
+    tex_boss_v2_frames = load_anim(gif_boss_v2)
     if not tex_boss_v2_frames: tex_boss_v2_frames = [enemy_tex]
 
     medkit_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
@@ -285,7 +282,7 @@ def generate_textures():
     pygame.draw.rect(medkit_tex, (100, 100, 100), (24, 18, 16, 6))
 
     gif_portal = os.path.join(img_dir, "portal.gif")
-    tex_portal_frames = load_gif(gif_portal)
+    tex_portal_frames = load_anim(gif_portal)
     if not tex_portal_frames: tex_portal_frames = [wall_tex]
     
     tex_portal_red_frames = []
@@ -302,10 +299,15 @@ def generate_textures():
     pygame.draw.rect(key_tex, (255, 215, 0), (34, 36, 8, 4))
     pygame.draw.rect(key_tex, (255, 215, 0), (34, 44, 8, 4))
 
-    grenade_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
-    pygame.draw.circle(grenade_tex, (80, 100, 60), (32, 36), 18)
-    pygame.draw.rect(grenade_tex, (50, 60, 40), (28, 16, 8, 10))
-    pygame.draw.circle(grenade_tex, (180, 180, 180), (38, 18), 6, 2) # Pin ring
+    grenade_path = os.path.join(img_dir, "grenade.png")
+    try:
+        grenade_tex = pygame.image.load(grenade_path).convert_alpha()
+        grenade_tex = pygame.transform.scale(grenade_tex, (64, 64))
+    except:
+        grenade_tex = pygame.Surface((64, 64), pygame.SRCALPHA)
+        pygame.draw.circle(grenade_tex, (80, 100, 60), (32, 36), 18)
+        pygame.draw.rect(grenade_tex, (50, 60, 40), (28, 16, 8, 10))
+        pygame.draw.circle(grenade_tex, (180, 180, 180), (38, 18), 6, 2) # Pin ring
 
     def load_wep(idle_f, shoot_f, icon_f):
         try:
@@ -328,22 +330,34 @@ def generate_textures():
 
 class Game:
     def __init__(self) -> None:
-        pygame.init()
-        pygame.display.set_caption("Doom Pygame 2.5D")
+        print("--- GAME INIT START ---")
+        try:
+            pygame.init()
+            pygame.display.set_caption("Doom Pygame 2.5D")
+        except Exception as e:
+            print("Failed to init pygame:", e)
 
         self.W, self.H = 960, 540
         self.screen = pygame.display.set_mode((self.W, self.H))
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("consolas", 18)
-        self.big_font = pygame.font.SysFont("consolas", 48, bold=True)
+        try:
+            self.font = pygame.font.SysFont("consolas", 18)
+        except Exception:
+            self.font = pygame.font.Font(None, 22)
+        try:
+            self.big_font = pygame.font.SysFont("consolas", 48, bold=True)
+        except Exception:
+            self.big_font = pygame.font.Font(None, 52)
 
         self.render_scale = 2 
         self.fov = math.radians(66)
         
+        print("Generating textures...")
         (self.tex_wall_def, self.tex_enemy_def, self.tex_boss_def, self.tex_death_frames, self.tex_medkit, 
          self.p_idle, self.p_shoot, self.p_icon, self.s_idle, self.s_shoot, self.s_icon, self.tex_floor_def, self.tex_ceiling_def,
          self.tex_wall_jungle, self.tex_enemy_v2, self.tex_boss_v2, self.tex_floor_jungle, self.tex_ceiling_jungle,
          self.tex_portal, self.tex_portal_red, self.tex_key, self.tex_grenade) = generate_textures()
+        print("Textures completed.")
         
         self.tex_wall = self.tex_wall_def
         self.tex_enemy_frames = self.tex_enemy_def
@@ -440,19 +454,39 @@ class Game:
         self.firing = False
         self.fire_flash = 0.0
         self.hit_marker = 0.0
-        self.mouse_look = True
+        # No browser, mouse grab is restricted; default to False for web compatibility
+        import sys as _sys
+        self.mouse_look = not getattr(_sys, 'platform', '').startswith('emscripten')
         self.heal_flash = 0.0
         self.moving_right = False
+        
+        self.game_state = "MENU"
+        self.menu_options = ["INICIAR JOGO", "SALA PERSONALIZADA", "AMIGOS", "CRÉDITOS"]
+        self.menu_selected = 0
+        
+        # Room Management
+        self.custom_room_options = ["CRIAR SALA", "ENTRAR EM SALA"]
+        self.custom_selected = 0
+        self.room_code = ""
+        self.input_text = "" # Texto sendo digitado
+        self.is_host = False
         self.headshot_msg_timer = 0.0
+        
+        # Multiplayer data
+        self.other_players = {} # { "id": {"x": 1.5, "y": 1.5, "ang": 0} }
+        self.player_id = str(random.randint(1000, 9999))
+        self.network_task = None
         
         self.mira_x = self.W // 2
         self.mira_y = self.H // 2
         self.pitch = 0
         
+        print("Loading level for the first time...")
         self._next_level()
         self.level_msg_timer = 0.0
 
         self._setup_mouse()
+        print("--- GAME INIT COMPLETELY FINISHED ---")
 
     def _respawn_items(self):
         self.items = []
@@ -572,36 +606,320 @@ class Game:
             self.portal_pos = (self.player.x, self.player.y)
 
     def _setup_mouse(self):
-        pygame.event.set_grab(self.mouse_look)
-        pygame.mouse.set_visible(not self.mouse_look)
-        pygame.mouse.get_rel()
+        try:
+            pygame.event.set_grab(self.mouse_look)
+        except Exception:
+            pass
+        try:
+            pygame.mouse.set_visible(not self.mouse_look)
+        except Exception:
+            pass
+        try:
+            pygame.mouse.get_rel()
+        except Exception:
+            pass
 
     def toggle_mouse(self):
         self.mouse_look = not self.mouse_look
         self._setup_mouse()
 
-    def run(self):
-        while True:
-            dt = self.clock.tick(60) / 1000.0
-            self._handle_events()
-            self._update(dt)
-            self._render()
+    async def run(self):
+        print("--- ASYNC RUN LOOP START ---")
+        try:
+            while True:
+                dt = self.clock.tick(60) / 1000.0
+                self._handle_events()
+                if self.game_state == "MENU":
+                    self._render_menu()
+                elif self.game_state == "CREDITS":
+                    self._render_credits()
+                elif self.game_state == "CUSTOM_ROOM":
+                    self._render_custom_room()
+                elif self.game_state == "FRIENDS":
+                    self._render_friends()
+                elif self.game_state == "JOIN_ROOM":
+                    self._render_join_room()
+                elif self.game_state == "LOBBY":
+                    self._render_lobby()
+                else:
+                    self._update(dt)
+                    self._render()
+                
+                # Enviar posição se estiver em jogo e conectado
+                if self.game_state == "PLAY" and self.room_code:
+                    self._send_pos()
+
+                await asyncio.sleep(0)
+        except Exception as e:
+            print("FATAL ERROR IN RUN LOOP:", e)
+            traceback.print_exc()
+
+    async def network_loop(self):
+        """Loop de rede em segundo plano"""
+        print(f"Iniciando loop de rede para sala: {self.room_code}")
+        # URL do servidor no Render (substituir após deploy)
+        uri = "ws://localhost:8080" 
+        try:
+            import platform
+            # Tenta importar websockets (pode precisar de micropip no browser)
+            try:
+                import websockets
+            except ImportError:
+                print("Websockets não disponível localmente. Usando simulação ou JS Bridge.")
+                return
+
+            async with websockets.connect(uri) as websocket:
+                self.ws = websocket
+                # Enviar comando de entrada
+                await websocket.send(json.dumps({
+                    "type": "join",
+                    "room": self.room_code,
+                    "id": self.player_id
+                }))
+                
+                async for message in websocket:
+                    data = json.loads(message)
+                    if data["type"] == "pos":
+                        p_id = data.get("id")
+                        if p_id and p_id != self.player_id:
+                            self.other_players[p_id] = {
+                                "x": data["x"],
+                                "y": data["y"],
+                                "ang": data["ang"]
+                            }
+        except Exception as e:
+            print(f"Erro de conexão: {e}")
+            self.ws = None
+
+    def _send_pos(self):
+        """Envia posição atual para o servidor"""
+        if hasattr(self, 'ws') and self.ws:
+            try:
+                msg = json.dumps({
+                    "type": "pos",
+                    "room": self.room_code,
+                    "id": self.player_id,
+                    "x": self.player.x,
+                    "y": self.player.y,
+                    "ang": self.player.ang
+                })
+                # Criar tarefa para não travar o game loop
+                asyncio.create_task(self.ws.send(msg))
+            except:
+                pass
+
+    def _render_menu(self):
+        self.screen.fill((20, 20, 20))
+        # Titulo Principal
+        title = self.big_font.render("ULTIMATE DOOM 2.5D", True, (200, 30, 30))
+        self.screen.blit(title, (self.W//2 - title.get_width()//2, 80))
+        
+        for i, option in enumerate(self.menu_options):
+            color = (255, 255, 0) if i == self.menu_selected else (200, 200, 200)
+            prefix = "> " if i == self.menu_selected else "  "
+            txt = self.font.render(prefix + option, True, color)
+            self.screen.blit(txt, (self.W//2 - txt.get_width()//2, 220 + i*50))
+            
+        pygame.display.flip()
+
+    def _render_credits(self):
+        self.screen.fill((15, 0, 0)) # Fundo infernal escuro
+        
+        # Titulo Principal
+        title = self.big_font.render("--- DESENVOLVEDORES ---", True, (255, 40, 40))
+        self.screen.blit(title, (self.W//2 - title.get_width()//2, 70))
+        
+        lines = [
+            ("MATHEUS", "Mestre da Arquitetura 3D e Engenharia de Software"),
+            ("EDUARDO", "Lorde do Design Visual e Vanguarda Criativa"),
+            ("", ""),
+            ("Uma experiência FPS forjada do zero.", ""),
+            ("Feito com Sangue, Suor e Código.", ""),
+            ("", ""),
+            ("[ Pressione ESC para voltar ]", "")
+        ]
+        
+        y = 170
+        for name, desc in lines:
+            if name and desc:
+                txt1 = self.font.render(name + ": ", True, (255, 215, 0))
+                txt2 = self.font.render(desc, True, (200, 200, 200))
+                total_w = txt1.get_width() + txt2.get_width()
+                self.screen.blit(txt1, (self.W//2 - total_w//2, y))
+                self.screen.blit(txt2, (self.W//2 - total_w//2 + txt1.get_width(), y))
+            elif name: # Somente texto centralizado (como o Pressione Esc)
+                txt = self.font.render(name, True, (120, 120, 120))
+                self.screen.blit(txt, (self.W//2 - txt.get_width()//2, y))
+            y += 45
+            
+        pygame.display.flip()
+
+    def _render_custom_room(self):
+        self.screen.fill((10, 10, 30))
+        title = self.big_font.render("SALA PERSONALIZADA", True, (100, 100, 255))
+        self.screen.blit(title, (self.W//2 - title.get_width()//2, 80))
+        
+        for i, option in enumerate(self.custom_room_options):
+            color = (255, 255, 0) if i == self.custom_selected else (200, 200, 200)
+            prefix = "> " if i == self.custom_selected else "  "
+            txt = self.font.render(prefix + option, True, color)
+            self.screen.blit(txt, (self.W//2 - txt.get_width()//2, 220 + i*60))
+            
+        sub = self.font.render("[ Pressione ESC para voltar ]", True, (100, 100, 100))
+        self.screen.blit(sub, (self.W//2 - sub.get_width()//2, self.H - 50))
+        pygame.display.flip()
+
+    def _render_join_room(self):
+        self.screen.fill((10, 10, 30))
+        title = self.big_font.render("ENTRAR EM SALA", True, (100, 255, 255))
+        self.screen.blit(title, (self.W//2 - title.get_width()//2, 100))
+        
+        prompt = self.font.render("DIGITE O CÓDIGO DA SALA:", True, (255, 255, 255))
+        self.screen.blit(prompt, (self.W//2 - prompt.get_width()//2, 220))
+        
+        # Caixa de Texto
+        code_box = pygame.Surface((200, 50))
+        code_box.fill((30, 30, 60))
+        pygame.draw.rect(code_box, (0, 255, 255), (0, 0, 200, 50), 2)
+        txt = self.big_font.render(self.input_text, True, (255, 255, 0))
+        code_box.blit(txt, (100 - txt.get_width()//2, 0))
+        self.screen.blit(code_box, (self.W//2 - 100, 270))
+        
+        sub = self.font.render("[ ENTER para Confirmar | ESC para Voltar ]", True, (150, 150, 150))
+        self.screen.blit(sub, (self.W//2 - sub.get_width()//2, 400))
+        pygame.display.flip()
+
+    def _render_lobby(self):
+        self.screen.fill((20, 40, 20))
+        title = self.big_font.render("LOBBY DA SALA", True, (255, 255, 255))
+        self.screen.blit(title, (self.W//2 - title.get_width()//2, 50))
+        
+        code_msg = self.font.render(f"CÓDIGO DA SALA: {self.room_code}", True, (255, 255, 0))
+        self.screen.blit(code_msg, (self.W//2 - code_msg.get_width()//2, 120))
+        
+        status = self.font.render("AGUARDANDO JOGADORES...", True, (200, 200, 200))
+        self.screen.blit(status, (self.W//2 - status.get_width()//2, 250))
+        
+        if self.is_host:
+            btn = self.font.render("[ PRESSIONE ENTER PARA INICIAR PARTIDA ]", True, (255, 255, 255))
+            self.screen.blit(btn, (self.W//2 - btn.get_width()//2, 350))
+        else:
+            msg = self.font.render("O HOST INICIARÁ A PARTIDA EM BREVE", True, (150, 150, 150))
+            self.screen.blit(msg, (self.W//2 - msg.get_width()//2, 350))
+
+        sub = self.font.render("[ ESC para Sair ]", True, (100, 100, 100))
+        self.screen.blit(sub, (self.W//2 - sub.get_width()//2, self.H - 50))
+        pygame.display.flip()
+
+    def _render_friends(self):
+        self.screen.fill((10, 30, 10))
+        title = self.big_font.render("LISTA DE AMIGOS", True, (100, 255, 100))
+        self.screen.blit(title, (self.W//2 - title.get_width()//2, 100))
+        msg = self.font.render("CONECTANDO AO SERVIDOR...", True, (255, 255, 255))
+        self.screen.blit(msg, (self.W//2 - msg.get_width()//2, 250))
+        sub = self.font.render("[ Pressione ESC para voltar ]", True, (150, 150, 150))
+        self.screen.blit(sub, (self.W//2 - sub.get_width()//2, 350))
+        pygame.display.flip()
 
     def _handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit(); sys.exit()
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE: sys.exit()
-                if event.key == pygame.K_m: self.toggle_mouse()
-                if event.key == pygame.K_1: self.player.weapon_idx = 0
-                if event.key == pygame.K_2 and self.level >= 4: self.player.weapon_idx = 1
-                if event.key == pygame.K_TAB: self._use_medkit()
-                if event.key == pygame.K_SPACE: self._throw_grenade()
-                if event.key == pygame.K_RETURN: self._next_level()
-                if event.key == pygame.K_r: self.player.ammo = min(200, self.player.ammo + 25)
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                self._fire()
+                pygame.quit(); raise SystemExit
+                
+            if self.game_state == "MENU":
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_UP:
+                        self.menu_selected = (self.menu_selected - 1) % len(self.menu_options)
+                    elif event.key == pygame.K_DOWN:
+                        self.menu_selected = (self.menu_selected + 1) % len(self.menu_options)
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        sel = self.menu_options[self.menu_selected]
+                        if sel == "INICIAR JOGO":
+                            self.game_state = "PLAY"
+                            if self.mouse_look: self._setup_mouse()
+                        elif sel == "SALA PERSONALIZADA":
+                            self.game_state = "CUSTOM_ROOM"
+                            self.custom_selected = 0
+                        elif sel == "AMIGOS":
+                            self.game_state = "FRIENDS"
+                        elif sel == "CRÉDITOS":
+                            self.game_state = "CREDITS"
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    _, my = pygame.mouse.get_pos()
+                    if 210 <= my < 260: # Iniciar Jogo
+                        self.game_state = "PLAY"
+                        if getattr(sys, 'platform', '').startswith('emscripten'): 
+                            if not self.mouse_look: self.toggle_mouse()
+                    elif 260 <= my < 310: # Sala Personalizada
+                        self.game_state = "CUSTOM_ROOM"
+                        self.custom_selected = 0
+                    elif 310 <= my < 360: # Amigos
+                        self.game_state = "FRIENDS"
+                    elif 360 <= my <= 410: # Créditos
+                        self.game_state = "CREDITS"
+
+            elif self.game_state == "CUSTOM_ROOM":
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_UP:
+                        self.custom_selected = (self.custom_selected - 1) % len(self.custom_room_options)
+                    elif event.key == pygame.K_DOWN:
+                        self.custom_selected = (self.custom_selected + 1) % len(self.custom_room_options)
+                    elif event.key == pygame.K_ESCAPE:
+                        self.game_state = "MENU"
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        sel = self.custom_room_options[self.custom_selected]
+                        if sel == "CRIAR SALA":
+                            self.is_host = True
+                            self.room_code = "".join([str(random.randint(0,9)) for _ in range(4)])
+                            self.game_state = "LOBBY"
+                            self.network_task = asyncio.create_task(self.network_loop())
+                        elif sel == "ENTRAR EM SALA":
+                            self.is_host = False
+                            self.input_text = ""
+                            self.game_state = "JOIN_ROOM"
+
+            elif self.game_state == "JOIN_ROOM":
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.game_state = "CUSTOM_ROOM"
+                    elif event.key == pygame.K_BACKSPACE:
+                        self.input_text = self.input_text[:-1]
+                    elif event.key == pygame.K_RETURN:
+                        if len(self.input_text) > 0:
+                            self.room_code = self.input_text
+                            self.game_state = "LOBBY"
+                            self.network_task = asyncio.create_task(self.network_loop())
+                    else:
+                        if len(self.input_text) < 4 and event.unicode.isalnum():
+                            self.input_text += event.unicode.upper()
+
+            elif self.game_state == "LOBBY":
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.game_state = "CUSTOM_ROOM"
+                    if event.key == pygame.K_RETURN and self.is_host:
+                        self.game_state = "PLAY"
+                        if self.mouse_look: self._setup_mouse()
+
+            elif self.game_state in ("CREDITS", "FRIENDS"):
+                if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
+                    self.game_state = "MENU"
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    self.game_state = "MENU"
+            else:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE: self.game_state = "MENU"
+                    if event.key == pygame.K_m: self.toggle_mouse()
+                    if event.key == pygame.K_1: self.player.weapon_idx = 0
+                    if event.key == pygame.K_2 and self.level >= 4: self.player.weapon_idx = 1
+                    if event.key == pygame.K_TAB: self._use_medkit()
+                    if event.key == pygame.K_SPACE: self._throw_grenade()
+                    if event.key == pygame.K_RETURN: self._next_level()
+                    if event.key == pygame.K_r: self.player.ammo = min(200, self.player.ammo + 25)
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if not self.mouse_look and getattr(sys, 'platform', '').startswith('emscripten'):
+                        self.toggle_mouse()
+                    self._fire()
 
     def _use_medkit(self):
         if self.player.hp < 150 and self.player.medkits > 0:
@@ -876,42 +1194,13 @@ class Game:
         pygame.draw.rect(self.screen, ceil_clr, (0, 0, self.W, horizon))
         pygame.draw.rect(self.screen, floor_clr, (0, horizon, self.W, self.H - horizon))
 
-        res = 4 
-        cos_pa, sin_pa = math.cos(pa), math.sin(pa)
-        cos_pa_rt, sin_pa_rt = math.cos(pa + math.pi/2), math.sin(pa + math.pi/2)
-        fov_w = math.tan(self.fov/2)
-
-        for y in range(int(horizon), self.H, res):
-            dy = max(1, y - (self.H // 2 + self.pitch))
-            dist = (self.H * 0.5) / dy
-            shade = max(0.1, 1.0 - dist / 11.0)
-            if shade < 0.1: continue
-
-            for x in range(0, self.W, res):
-                cam_x = (2.0 * x / (self.W - 1) - 1.0) * fov_w
-                world_x = px + dist * (cos_pa + cam_x * cos_pa_rt)
-                world_y = py + dist * (sin_pa + cam_x * sin_pa_rt)
-                
-                tx, ty = int(world_x * 64) % 64, int(world_y * 64) % 64
-                color = self.tex_floor.get_at((tx, ty))
-                color = (int(color[0] * shade), int(color[1] * shade), int(color[2] * shade))
-                pygame.draw.rect(self.screen, color, (x, y, res, res))
-
-        for y in range(0, int(horizon), res):
-            dy = max(1, (self.H // 2 + self.pitch) - y)
-            dist = (self.H * 0.5) / dy
-            shade = max(0.1, 0.7 - dist / 20.0)
-            if shade < 0.1: continue
-
-            for x in range(0, self.W, res):
-                cam_x = (2.0 * x / (self.W - 1) - 1.0) * fov_w
-                world_x = px + dist * (cos_pa + cam_x * cos_pa_rt)
-                world_y = py + dist * (sin_pa + cam_x * sin_pa_rt)
-                
-                tx, ty = int(world_x * 64) % 64, int(world_y * 64) % 64
-                color = self.tex_ceiling.get_at((tx, ty))
-                color = (int(color[0] * shade), int(color[1] * shade), int(color[2] * shade))
-                pygame.draw.rect(self.screen, color, (x, y, res, res))
+        # Fast flat floor/ceiling for browser compatibility
+        floor_clr_full = floor_clr
+        ceil_clr_full = ceil_clr
+        # Draw ceiling
+        pygame.draw.rect(self.screen, ceil_clr_full, (0, 0, self.W, int(horizon)))
+        # Draw floor
+        pygame.draw.rect(self.screen, floor_clr_full, (0, int(horizon), self.W, self.H - int(horizon)))
 
         cols = self.W // self.render_scale
         zbuf = [0.0] * cols
@@ -955,6 +1244,10 @@ class Game:
         sprites += [(math.hypot(p.x-px, p.y-py), p.x, p.y, p) for p in self.particles]
         sprites += [(math.hypot(p.x-px, p.y-py), p.x, p.y, p) for p in self.projectiles]
         sprites += [(math.hypot(it.x-px, it.y-py), it.x, it.y, it) for it in self.items if it.active]
+        
+        for p_id, p_data in self.other_players.items():
+            sprites.append((math.hypot(p_data["x"]-px, p_data["y"]-py), p_data["x"], p_data["y"], "player"))
+
         sprites.sort(key=lambda t: -t[0])
 
         for dist, ex, ey, obj in sprites:
@@ -989,6 +1282,9 @@ class Game:
                     f_idx = self.portal_frame % len(self.tex_portal)
                     tex = self.tex_portal[f_idx] if self.player_has_key else self.tex_portal_red[f_idx]
                     scale = 2.0
+                elif obj == "player":
+                    tex = self.tex_enemy_frames[0]
+                    scale = 0.8
                 
                 hw, hh = size * 0.7 * scale, size * 0.7 * scale
                 if hw < 1 or hh < 1: continue
@@ -1190,21 +1486,10 @@ class Game:
         icon = self.p_icon if self.player.weapon_idx == 0 else self.s_icon
         self.screen.blit(pygame.transform.scale(icon, (64, 64)), (self.W - 80, self.H - 140))
 
-        # --- ANIMAÇÃO DE ARREMESSO (MÃO) ---
-        if self.grenade_throw_anim > 0:
-            t = self.grenade_throw_anim
-            # Braço subindo do canto da tela
-            arm_y = self.H - (t * self.H * 0.8)
-            arm_x = self.W // 2 + 50
-            # Desenha um braço procedural
-            pygame.draw.ellipse(self.screen, (100, 80, 60), (arm_x, arm_y, 80, 200))
-            # Grenada na mão
-            pygame.draw.circle(self.screen, (80, 100, 60), (arm_x + 30, arm_y + 20), 15)
-            pygame.draw.circle(self.screen, (150, 150, 150), (arm_x + 40, arm_y + 10), 6, 2)
+        # (Animação 2D de arremesso removida para evitar poluição visual e imagem dupla)
 
         if self.wep_msg_timer > 0:
-            font = pygame.font.SysFont('Arial', 48, bold=True)
-            msg = font.render("SHOTGUN DESBLOQUEADA!", True, (255, 255, 0))
+            msg = self.big_font.render("SHOTGUN DESBLOQUEADA!", True, (255, 255, 0))
             self.screen.blit(msg, (self.W//2 - msg.get_width()//2, self.H//2))
 
         if self.headshot_msg_timer > 0:
@@ -1229,5 +1514,17 @@ class Game:
             ov.fill((50, 200, 50, int(50 * self.heal_flash)))
             self.screen.blit(ov, (0, 0))
 
+        pygame.display.flip()
+
+async def main():
+    print("--- ASYNC MAIN START ---")
+    try:
+        game = Game()
+        await game.run()
+    except Exception as e:
+        print("ERROR IN MAIN:", e)
+        traceback.print_exc()
+
 if __name__ == "__main__":
-    Game().run()
+    print("--- STARTING EVENT LOOP ---")
+    asyncio.run(main())

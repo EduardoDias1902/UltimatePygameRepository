@@ -1,0 +1,47 @@
+import asyncio
+import websockets
+import json
+
+# Dicionário para guardar as salas: { "código": [lista_de_conexoes] }
+rooms = {}
+
+async def handler(websocket, path):
+    room_id = None
+    try:
+        async for message in websocket:
+            data = json.loads(message)
+            
+            # Quando um jogador entra na sala
+            if data["type"] == "join":
+                room_id = data["room"]
+                if room_id not in rooms:
+                    rooms[room_id] = []
+                rooms[room_id].append(websocket)
+                print(f"Jogador entrou na sala: {room_id}")
+
+            # Quando um jogador envia sua posição, repassa para os outros na mesma sala
+            elif data["type"] == "pos" and room_id:
+                if room_id in rooms:
+                    # Enviar para todos na sala, exceto para quem enviou
+                    message_to_send = json.dumps(data)
+                    for client in rooms[room_id]:
+                        if client != websocket:
+                            await client.send(message_to_send)
+    except:
+        pass
+    finally:
+        # Remover o jogador da sala ao desconectar
+        if room_id in rooms and websocket in rooms[room_id]:
+            rooms[room_id].remove(websocket)
+            if not rooms[room_id]:
+                del rooms[room_id]
+        print("Jogador desconectado")
+
+async def main():
+    # Roda o servidor na porta 8080
+    async with websockets.serve(handler, "0.0.0.0", 8080):
+        print("Servidor de Doom Multiplayer rodando na porta 8080...")
+        await asyncio.Future()  # roda para sempre
+
+if __name__ == "__main__":
+    asyncio.run(main())
