@@ -476,6 +476,7 @@ class Game:
         self.other_players = {} # { "id": {"x": 1.5, "y": 1.5, "ang": 0} }
         self.player_id = str(random.randint(1000, 9999))
         self.network_task = None
+        self.net_status = "DESCONECTADO"
         
         self.mira_x = self.W // 2
         self.mira_y = self.H // 2
@@ -655,23 +656,35 @@ class Game:
             traceback.print_exc()
 
     async def network_loop(self):
-        """Loop de rede ultra-compatível (JS Bridge)"""
+        """Loop de rede ultra-estável (JS Bridge v2)"""
+        if self.network_task and not self.network_task.done():
+            self.network_task.cancel()
+            
         uri = "wss://doom-multiplayer.onrender.com"
+        self.net_status = "CONECTANDO..."
         try:
             import platform
             if platform.system() == 'Emscripten':
                 from platform import window
-                # Criar WebSocket e Fila de mensagens no JS
                 self.ws = window.WebSocket.new(uri)
                 window.eval("window.doom_msg_queue = [];")
                 self.ws.onmessage = window.eval("(event) => { window.doom_msg_queue.push(event.data); }")
                 
-                # Callback de conexão aberta
-                on_open_msg = json.dumps({"type": "join", "room": self.room_code, "id": self.player_id})
-                self.ws.onopen = window.eval(f"(e) => {{ e.target.send('{on_open_msg}'); }}")
+                # Garante que mandamos o JOIN mesmo se a conexão for instantânea
+                join_msg = json.dumps({"type": "join", "room": self.room_code, "id": self.player_id})
+                window.eval(f"window.doom_ws_join = '{join_msg}';")
+                self.ws.onopen = window.eval("(e) => { e.target.send(window.doom_ws_join); }")
                 
+                # Check se já abriu enquanto rodava o código acima
+                if int(self.ws.readyState) == 1:
+                    self.ws.send(join_msg)
+
                 while True:
-                    # Checar se há mensagens na fila do JS
+                    if int(self.ws.readyState) == 1:
+                        self.net_status = "CONECTADO"
+                    elif int(self.ws.readyState) > 1:
+                        self.net_status = "ERRO"
+                        
                     q_len = int(window.eval("window.doom_msg_queue.length"))
                     for _ in range(q_len):
                         msg_str = str(window.eval("window.doom_msg_queue.shift()"))
@@ -681,11 +694,13 @@ class Game:
                 import websockets
                 async with websockets.connect(uri) as websocket:
                     self.ws = websocket
+                    self.net_status = "CONECTADO"
                     await websocket.send(json.dumps({"type": "join", "room": self.room_code, "id": self.player_id}))
                     async for message in websocket:
                         self._process_network_data(json.loads(message))
         except Exception as e:
             print(f"Erro rede: {e}")
+            self.net_status = "ERRO"
             self.ws = None
 
     def _process_network_data(self, data):
@@ -820,6 +835,9 @@ class Game:
         count = len(self.other_players) + 1
         players_txt = self.font.render(f"JOGADORES CONECTADOS: {count}", True, (0, 255, 0))
         self.screen.blit(players_txt, (self.W//2 - players_txt.get_width()//2, 300))
+        
+        net_txt = self.font.render(f"REDE: {self.net_status}", True, (150, 150, 255))
+        self.screen.blit(net_txt, (10, self.H - 30))
         
         
         if self.is_host:
