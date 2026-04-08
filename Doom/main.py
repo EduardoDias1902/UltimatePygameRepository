@@ -813,9 +813,11 @@ class Game:
                 print(f"[NET] Jogador saiu: {p_id}")
                 del self.other_players[p_id]
         elif msg_type == "start":
-            print("[NET] Partida iniciada/avançada pelo Host!")
+            print("[NET] Partida iniciada pelo Host!")
             host_map = data.get("map_idx", 0)
             host_level = data.get("level", 1)
+            
+            self.game_state = "PLAY" # Seta estado PLAY primeiro!
             
             # Para re-gerar exatamente os mesmos inimigos, nós manipulamos o level e recriamos via _next_level
             self.level = host_level - 1
@@ -824,7 +826,7 @@ class Game:
             self.map_idx = host_map # Previne que next_level altere o map incorretamente
             
             self.world = World(self.maps[self.map_idx])
-            # Atualiza texturas para o mapa correto
+            # Atualiza texturas baseadas no mapa
             if self.map_idx == 1:
                 self.tex_wall = self.tex_wall_jungle
                 self.tex_enemy_frames = self.tex_enemy_v2
@@ -840,7 +842,6 @@ class Game:
                 
             self.level = host_level
             self.player.x, self.player.y = 1.5, 1.5
-            self.game_state = "PLAY"
         elif msg_type == "hit":
             idx = data.get("idx")
             dmg = data.get("dmg")
@@ -1090,8 +1091,11 @@ class Game:
                     if event.key == pygame.K_ESCAPE:
                         self.game_state = "CUSTOM_ROOM"
                     if event.key == pygame.K_RETURN and self.is_host:
-                        self.game_state = "PLAY"
-                        self._next_level() # <-- Chama next_level antes! O envio ws_send() ocorrerá automaticamente dentro do _next_level!
+                        if self.ws: # Só deixa começar se estiver conectado!
+                            self.game_state = "PLAY"
+                            self._next_level() 
+                        else:
+                            print("[NET] Aguardando conexão para iniciar...")
 
             elif self.game_state in ("CREDITS", "FRIENDS"):
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
@@ -1751,7 +1755,7 @@ class Game:
         self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
 
         # --- WATERMARK ---
-        v_txt = self.font.render("v3.0 SYNC", True, (0, 255, 0))
+        v_txt = self.font.render("v4.2 SYNC", True, (0, 255, 0))
         self.screen.blit(v_txt, (self.W - 120, 20))
 
         # --- OUTROS AVISOS ---
