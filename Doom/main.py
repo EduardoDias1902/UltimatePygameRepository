@@ -487,7 +487,7 @@ class Game:
         self._next_level()
         self.level_msg_timer = 0.0
 
-        self._setup_mouse()
+        # self._setup_mouse() # Removido do init para evitar erros de permissão do navegador
         print("--- GAME INIT COMPLETELY FINISHED ---")
 
     def _respawn_items(self):
@@ -751,15 +751,22 @@ class Game:
         """Envia posição atual para o servidor via Bridge JS"""
         if self.ws and self.room_code:
             try:
-                from platform import window
-                msg = json.dumps({
+                msg_dict = {
                     "type": "pos", "room": self.room_code, "id": self.player_id,
                     "x": round(self.player.x, 2), "y": round(self.player.y, 2), "ang": round(self.player.ang, 2)
-                })
-                # Envia via executando script no navegador com Log para debug
-                window.eval(f"if(window.doom_ws && window.doom_is_ready) {{ window.doom_ws.send('{msg}'); }}")
+                }
+                self.ws_send(msg_dict)
             except:
                 pass
+
+    def ws_send(self, data_dict):
+        """Ponte robusta para enviar qualquer dado ao servidor via JavaScript"""
+        try:
+            from platform import window
+            msg = json.dumps(data_dict)
+            window.eval(f"if(window.doom_ws && window.doom_is_ready) {{ window.doom_ws.send('{msg}'); }}")
+        except:
+            pass
 
     def _render_menu(self):
         self.screen.fill((20, 20, 20))
@@ -964,12 +971,11 @@ class Game:
                     if event.key == pygame.K_ESCAPE:
                         self.game_state = "CUSTOM_ROOM"
                     if event.key == pygame.K_RETURN and self.is_host:
-                        # Enviar comando de início para os outros na sala
-                        if hasattr(self, 'ws') and self.ws:
-                            asyncio.create_task(self.ws.send(json.dumps({
-                                "type": "start",
-                                "room": self.room_code
-                            })))
+                        # Enviar comando de início usando a nova ponte ws_send
+                        self.ws_send({
+                            "type": "start",
+                            "room": self.room_code
+                        })
                         self.game_state = "PLAY"
                         if self.mouse_look: self._setup_mouse()
 
