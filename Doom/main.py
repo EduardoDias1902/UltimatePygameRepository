@@ -472,12 +472,13 @@ class Game:
         self.is_host = False
         self.headshot_msg_timer = 0.0
         
-        # Multiplayer data
-        self.other_players = {} # { "id": {"x": 1.5, "y": 1.5, "ang": 0} }
+        # Multiplayer
+        self.other_players = {}
         self.player_id = str(random.randint(1000, 9999))
-        self.network_task = None
+        self.network_task = None  # mantido para compatibilidade, não usado
         self.net_status = "DESCONECTADO"
-        self.ws = None # Será usado como flag de "pronto para enviar"
+        self.ws = None
+        self.net_initialized = False  # Flag para o novo sistema de rede
         
         self.mira_x = self.W // 2
         self.mira_y = self.H // 2
@@ -632,11 +633,9 @@ class Game:
                 dt = self.clock.tick(60) / 1000.0
                 self._handle_events()
                 
-                # Gerenciamento da task de rede: inicia se no Lobby e ainda não está rodando
-                if self.game_state in ("LOBBY", "PLAY") and self.room_code:
-                    if not self.network_task or self.network_task.done():
-                        print(f"Iniciando network_loop para sala {self.room_code}")
-                        self.network_task = asyncio.create_task(self.network_loop())
+                # Rede: inicia e atualiza a cada frame (mais confiável que asyncio task)
+                if self.room_code and self.game_state in ("LOBBY", "PLAY"):
+                    self._net_tick()
                 
                 if self.game_state == "MENU":
                     self._render_menu()
@@ -654,8 +653,8 @@ class Game:
                     self._update(dt)
                     self._render()
                 
-                # Enviar posição se estiver em jogo e conectado
-                if self.game_state == "PLAY" and self.room_code:
+                # Envia posição se em jogo e conectado
+                if self.game_state == "PLAY" and self.room_code and self.ws:
                     self._send_pos()
 
                 await asyncio.sleep(0)
@@ -663,96 +662,142 @@ class Game:
             print("FATAL ERROR IN RUN LOOP:", e)
             traceback.print_exc()
 
-    async def network_loop(self):
-        """Loop de rede via JS Native (Focando em velocidade de resposta)"""
+    def _net_init(self):
+        """Inicializa o WebSocket no navegador (chamado uma vez ao entrar na sala)"""
         uri = "wss://doom-multiplayer.onrender.com"
-        from platform import window
-        
-        while True:
-            self.net_status = "ACORDANDO..."
-            try:
-                window.eval(f"""
-                    if (!window.doom_ws || window.doom_ws.readyState !== 1) {{
-                        console.log("[WS] Iniciando nova conexão...");
-                        if (window.doom_ws) window.doom_ws.close();
-                        window.doom_ws = new WebSocket('{uri}');
-                        window.doom_msg_queue = window.doom_msg_queue || [];
-                        window.doom_is_ready = false;
-                        window.doom_ws.onopen = () => {{ 
-                            console.log("[WS] Conectado!");
-                            window.doom_is_ready = true;
-                            window.doom_ws.send(JSON.stringify({{
-                                type: 'join', room: '{self.room_code}', id: '{self.player_id}'
-                            }}));
-                        }};
-                        window.doom_ws.onmessage = (e) => {{
-                            console.log("[WS] Mensagem Recebida:", e.data);
-                            window.doom_msg_queue.push(e.data);
-                        }};
-                        window.doom_ws.onclose = () => {{ 
-                            console.log("[WS] Desconectado.");
-                            window.doom_is_ready = false; 
-                        }};
-                    }}
-                """)
+        try:
+            from platform import window
+            window.eval(f"""
+                console.log('[NET] Inicializando WebSocket...');
+                if (window.doom_ws) window.doom_ws.close();
+                window.doom_ws = new WebSocket('{uri}');
+                window.doom_msg_queue = [];
+                window.doom_is_ready = false;
+                window.doom_ws.onopen = () => {{
+                    console.log('[NET] Conectado! Enviando JOIN para sala {self.room_code}...');
+                    window.doom_is_ready = true;
+                    window.doom_ws.send(JSON.stringify({{
+                        type: 'join', room: '{self.room_code}', id: '{self.player_id}'
+                    }}));
+                }};
+                window.doom_ws.onmessage = (e) => {{
+                    console.log('[NET] Recebeu:', e.data);
+                    window.doom_msg_queue.push(e.data);
+                }};
+                window.doom_ws.onclose = (e) => {{
+                    console.log('[NET] Desconectado. Code:', e.code);
+                    window.doom_is_ready = false;
+                }};
+                window.doom_ws.onerror = (e) => {{
+                    console.error('[NET] Erro WebSocket:', e);
+                }};
+            """)
+            self.net_initialized = True
+            self.net_status = "CONECTANDO..."
+        except Exception as e:
+            print(f"[NET] Init error (provavelmente desktop): {e}")
 
-                # Espera a conexão estabilizar
-                for _ in range(60):
-                    if window.eval("window.doom_is_ready"):
-                        self.net_status = "CONECTADO"
-                        self.ws = True 
-                        break
-                    await asyncio.sleep(0.5)
-                
-                if self.net_status != "CONECTADO":
-                    raise Exception("Inativo")
-
-                # Loop de escuta ativo e contínuo
-                while window.eval("window.doom_is_ready"):
-                    q_len = int(window.eval("window.doom_msg_queue.length"))
-                    if q_len > 0:
-                        for _ in range(q_len):
-                            raw_val = window.eval("window.doom_msg_queue.shift()")
-                            if raw_val is not None and str(raw_val) != "undefined":
-                                try:
-                                    msg_str = str(raw_val)
-                                    self._process_network_data(json.loads(msg_str))
-                                except Exception as e:
-                                    print(f"Erro JSON: {e}")
-                    await asyncio.sleep(0.01) 
-                    
-            except Exception as e:
-                print(f"Erro na Rede: {e}")
-                self.net_status = "ERR: RE-TENTANDO..."
+    def _net_tick(self):
+        """Verifica e lê mensagens de rede a cada frame (modo síncrono, sem asyncio)"""
+        try:
+            from platform import window
+            
+            # Se não inicializado ou WebSocket fechou, reconecta
+            if not self.net_initialized:
+                self._net_init()
+                return
+            
+            ws_state = window.eval("window.doom_ws ? window.doom_ws.readyState : -1")
+            ws_state_int = int(ws_state) if ws_state is not None else -1
+            
+            # Estado 3 = CLOSED, -1 = sem WS. Reconecta.
+            if ws_state_int == 3 or ws_state_int == -1:
+                self.net_initialized = False
                 self.ws = None
-                await asyncio.sleep(2)
-
-
-
+                self.net_status = "RECONECTANDO..."
+                return
+            
+            # Estado 0 = CONNECTING
+            if ws_state_int == 0:
+                self.net_status = "CONECTANDO..."
+                return
+            
+            # Estado 1 = OPEN
+            if ws_state_int == 1:
+                self.net_status = "CONECTADO"
+                self.ws = True
+            
+            # Lê mensagens pendentes na fila JS
+            q_len = window.eval("(window.doom_msg_queue || []).length")
+            if q_len:
+                count = int(q_len)
+                for _ in range(count):
+                    raw = window.eval("(window.doom_msg_queue || []).shift()")
+                    if raw is not None:
+                        raw_str = str(raw)
+                        if raw_str and raw_str != "undefined" and raw_str != "None":
+                            try:
+                                self._process_network_data(json.loads(raw_str))
+                            except Exception as e:
+                                print(f"[NET] JSON parse error: {e} | raw: {raw_str[:80]}")
+        except Exception as e:
+            # Silencia erros no desktop (sem 'platform.window')
+            pass
 
     def _process_network_data(self, data):
         """Processa as mensagens que chegam do servidor"""
-        if data["type"] == "pos":
+        msg_type = data.get("type")
+        if msg_type == "pos":
             p_id = data.get("id")
             if p_id and p_id != self.player_id:
                 self.other_players[p_id] = {
-                    "x": data["x"], "y": data["y"], "ang": data["ang"]
+                    "x": data.get("x", 1.5), "y": data.get("y", 1.5), "ang": data.get("ang", 0)
                 }
-        elif data["type"] == "player_joined":
+        elif msg_type == "player_joined":
             p_id = data.get("id")
             if p_id and p_id != self.player_id:
-                print(f"Novo sinal de jogador: {p_id}")
+                print(f"[NET] Jogador entrou: {p_id}")
                 if p_id not in self.other_players:
                     self.other_players[p_id] = {"x": 1.5, "y": 1.5, "ang": 0}
-        elif data["type"] == "player_left":
+                
+                # Se eu sou o HOST e o jogo já começou, aviso ao novo jogador
+                if self.is_host and self.game_state == "PLAY":
+                    self.ws_send({
+                        "type": "start",
+                        "room": self.room_code,
+                        "map_idx": self.map_idx,
+                        "level": self.level
+                    })
+        elif msg_type == "player_left":
             p_id = data.get("id")
-            if p_id in self.other_players:
-                print(f"Jogador saiu: {p_id}")
+            if p_id and p_id in self.other_players:
+                print(f"[NET] Jogador saiu: {p_id}")
                 del self.other_players[p_id]
-        elif data["type"] == "start":
-            print("Partida iniciada pelo Host!")
+        elif msg_type == "start":
+            print("[NET] Partida iniciada pelo Host!")
+            # Sincroniza o mapa e nivel com o host
+            host_map = data.get("map_idx", 0)
+            host_level = data.get("level", 1)
+            if host_map != self.map_idx:
+                self.map_idx = host_map
+                self.world = World(self.maps[self.map_idx])
+                # Atualiza texturas para o mapa correto
+                if self.map_idx == 1:
+                    self.tex_wall = self.tex_wall_jungle
+                    self.tex_enemy_frames = self.tex_enemy_v2
+                    self.tex_boss_frames = self.tex_boss_v2
+                    self.tex_floor = self.tex_floor_jungle
+                    self.tex_ceiling = self.tex_ceiling_jungle
+                else:
+                    self.tex_wall = self.tex_wall_def
+                    self.tex_enemy_frames = self.tex_enemy_def
+                    self.tex_boss_frames = self.tex_boss_def
+                    self.tex_floor = self.tex_floor_def
+                    self.tex_ceiling = self.tex_ceiling_def
+            self.level = host_level
+            self.player.x, self.player.y = 1.5, 1.5
             self.game_state = "PLAY"
-            if self.mouse_look: self._setup_mouse()
+
 
     def _send_pos(self):
         """Envia posição atual para o servidor via Bridge JS"""
@@ -770,8 +815,9 @@ class Game:
         """Ponte robusta para enviar qualquer dado ao servidor via JavaScript"""
         try:
             from platform import window
+            # Usa json.dumps e passa como string JS - JSON não contém aspas simples
             msg = json.dumps(data_dict)
-            window.eval(f"if(window.doom_ws && window.doom_is_ready) {{ window.doom_ws.send('{msg}'); }}")
+            window.eval(f"if(window.doom_ws&&window.doom_is_ready)window.doom_ws.send('{msg}');")
         except:
             pass
 
@@ -976,13 +1022,14 @@ class Game:
                     if event.key == pygame.K_ESCAPE:
                         self.game_state = "CUSTOM_ROOM"
                     if event.key == pygame.K_RETURN and self.is_host:
-                        # Enviar comando de início usando a nova ponte ws_send
+                        # Enviar comando de início com mapa e nível para sincronização
                         self.ws_send({
                             "type": "start",
-                            "room": self.room_code
+                            "room": self.room_code,
+                            "map_idx": self.map_idx,
+                            "level": self.level
                         })
                         self.game_state = "PLAY"
-                        if self.mouse_look: self._setup_mouse()
 
             elif self.game_state in ("CREDITS", "FRIENDS"):
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):

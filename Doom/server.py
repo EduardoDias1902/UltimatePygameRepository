@@ -1,6 +1,15 @@
 import asyncio
-import websockets
+import sys
+import subprocess
 import json
+
+try:
+    import websockets
+except ImportError:
+    print("Fazendo o download automático do websockets no servidor...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets==12.0"])
+    import websockets
+
 
 # Dicionários de estado global
 rooms = {}
