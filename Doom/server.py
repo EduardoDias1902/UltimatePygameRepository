@@ -47,7 +47,7 @@ async def main():
     import os
     # O Render exige que usemos a porta da variável de ambiente PORT
     port = int(os.environ.get("PORT", 8080))
-    async with websockets.serve(handler, "0.0.0.0", port):
+    async with websockets.serve(handler, "0.0.0.0", port, origins=None):
         print(f"Servidor de Doom Multiplayer rodando na porta {port}...")
         await asyncio.Future()  # roda para sempre
 

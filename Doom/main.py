@@ -689,11 +689,13 @@ class Game:
                             self.net_status = "CONECTADO"
                             break
                         elif state > 1:
-                            raise Exception("Falha JS")
+                            raise Exception(f"Falha JS (State {state})")
                         await asyncio.sleep(1)
                         timeout -= 1
                     
-                    if timeout <= 0: raise Exception("Timeout")
+                    if timeout <= 0: 
+                        state = int(window.eval("window.doom_ws.readyState"))
+                        raise Exception(f"Timeout (State {state})")
 
                     while int(window.eval("window.doom_ws.readyState")) == 1:
                         q_len = int(window.eval("window.doom_msg_queue.length"))
