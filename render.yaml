@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: doom-multiplayer
+    env: python
+    buildCommand: pip install websockets
+    startCommand: python Doom/server.py
+    plan: free
