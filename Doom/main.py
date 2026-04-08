@@ -1506,9 +1506,11 @@ class Game:
                     tex = self.tex_portal[f_idx] if self.player_has_key else self.tex_portal_red[f_idx]
                     scale = 2.0
                 elif obj == "player":
-                    if not hasattr(self, "tex_player_cache"):
-                        self.tex_player_cache = self.tex_enemy_frames[0].copy()
-                        self.tex_player_cache.fill((50, 255, 50, 255), special_flags=pygame.BLEND_RGBA_MULT)
+                    # Recria o cache se necessário (para pegar a skin do mapa atual)
+                    self.tex_player_cache = self.tex_enemy_frames[0].copy()
+                    tint = pygame.Surface(self.tex_player_cache.get_size(), pygame.SRCALPHA)
+                    tint.fill((0, 255, 0, 120))
+                    self.tex_player_cache.blit(tint, (0,0), special_flags=pygame.BLEND_RGBA_ADD)
                     tex = self.tex_player_cache
                     scale = 0.8
                 
@@ -1533,6 +1535,11 @@ class Game:
                     tex_x = min(x - x_start, int(hw) - 1)
                     strip = scaled_tex.subsurface((tex_x, 0, 1, int(hh)))
                     self.screen.blit(strip, (x, int(top)))
+                
+                # Desenha TAG de Jogador acima da cabeça
+                if obj == "player":
+                    tag = self.font.render("PLAYER", True, (0, 255, 0))
+                    self.screen.blit(tag, (pt_x - tag.get_width()//2, top - 20))
 
                 if isinstance(obj, Enemy) and obj.state != "dying":
                     hp_ratio = max(0.0, obj.hp / obj.max_hp)
@@ -1576,6 +1583,11 @@ class Game:
                 pygame.draw.circle(self.screen, c, (x0+int(e.x*s), y0+int(e.y*s)), r)
         for it in self.items:
             if it.active: pygame.draw.circle(self.screen, (200, 200, 255), (x0+int(it.x*s), y0+int(it.y*s)), 2)
+        
+        # Minimapa: Desenha outros jogadores (AZUL)
+        for p_data in self.other_players.values():
+            pygame.draw.circle(self.screen, (0, 100, 255), (x0+int(p_data["x"]*s), y0+int(p_data["y"]*s)), 3)
+
         px_m, py_m = x0+int(px*s), y0+int(py*s)
         pygame.draw.circle(self.screen, (220, 220, 220), (px_m, py_m), 3)
         pygame.draw.line(self.screen, (220, 220, 220), (px_m, py_m), (px_m+int(math.cos(pa)*5), py_m+int(math.sin(pa)*5)), 2)
