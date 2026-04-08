@@ -483,6 +483,7 @@ class Game:
         self.net_timer = 0.0
         self.net_packet_received = 0.0 # Timer para piscar bolinha de rede
         self.net_msg_count = 0 
+        self.net_debug_logs = [] # Log de rede na tela
         
         self.mira_x = self.W // 2
         self.mira_y = self.H // 2
@@ -710,8 +711,9 @@ class Game:
                     }}));
                 }};
                 window.doom_ws.onmessage = (e) => {{
-                    console.log('[NET] Recebeu:', e.data);
-                    window.doom_msg_queue.push(e.data);
+                    const d = e.data;
+                    if (window.doom_msg_queue.length > 20) window.doom_msg_queue.shift();
+                    window.doom_msg_queue.push(d);
                 }};
                 window.doom_ws.onclose = (e) => {{
                     console.log('[NET] Desconectado. Code:', e.code);
@@ -723,6 +725,7 @@ class Game:
             """)
             self.net_initialized = True
             self.net_status = "CONECTANDO..."
+            self.net_debug_logs.append("NET: Init WS")
         except Exception as e:
             print(f"[NET] Init error (provavelmente desktop): {e}")
 
@@ -756,23 +759,27 @@ class Game:
                 self.net_status = "CONECTADO"
                 self.ws = True
             
-            # Lê mensagens pendentes na fila JS
-            q_len = window.eval("(window.doom_msg_queue || []).length")
-            if q_len:
-                count = int(q_len)
-                for _ in range(count):
-                    raw = window.eval("(window.doom_msg_queue || []).shift()")
-                    if raw is not None:
-                        raw_str = str(raw)
-                        if raw_str and raw_str != "undefined" and raw_str != "None":
-                            try:
-                                self.net_packet_received = 0.2 # Pisca bolinha verde
-                                self.net_msg_count += 1
-                                self._process_network_data(json.loads(raw_str))
-                            except Exception as e:
-                                print(f"[NET] JSON parse error: {e} | raw: {raw_str[:80]}")
+            # Lê mensagens pendentes na fila JS de forma segura
+            raw_msg = window.eval("window.doom_msg_queue ? window.doom_msg_queue.shift() : null")
+            while raw_msg:
+                try:
+                    self.net_packet_received = 0.2
+                    self.net_msg_count += 1
+                    data = json.loads(str(raw_msg))
+                    self._process_network_data(data)
+                    # Log rápido
+                    m_type = data.get("type", "?")
+                    if m_type != "pos":
+                        self.net_debug_logs.append(f"REC: {m_type}")
+                        if len(self.net_debug_logs) > 5: self.net_debug_logs.pop(0)
+                    else:
+                        # Log de posição esporádico
+                        if self.net_msg_count % 30 == 0:
+                            self.net_debug_logs.append(f"REC: pos x{self.net_msg_count}")
+                            if len(self.net_debug_logs) > 5: self.net_debug_logs.pop(0)
+                except: pass
+                raw_msg = window.eval("window.doom_msg_queue ? window.doom_msg_queue.shift() : null")
         except Exception as e:
-            # Silencia erros no desktop (sem 'platform.window')
             pass
 
     def _process_network_data(self, data):
@@ -784,6 +791,12 @@ class Game:
                 self.other_players[p_id] = {
                     "x": data.get("x", 1.5), "y": data.get("y", 1.5), "ang": data.get("ang", 0)
                 }
+            
+            # AUTO-REPARO: Se o Host enviou mapa/level e eu ainda não estou em PLAY, força entrada
+            if not getattr(self, "is_host", False) and self.game_state == "LOBBY":
+                if "level" in data and data.get("level", 0) > 0:
+                    self._process_network_data({"type": "start", "map_idx": data.get("map_idx",0), "level": data.get("level",1)})
+
             if not getattr(self, "is_host", False) and "en" in data:
                 for i, enc in enumerate(data.get("en", [])):
                     if i < len(self.enemies) and self.enemies[i].state != "dying":
@@ -871,6 +884,8 @@ class Game:
                 }
                 if getattr(self, "is_host", False):
                     pack["en"] = [[round(e.x, 2), round(e.y, 2), float(e.hp), e.state] for e in self.enemies]
+                    pack["level"] = self.level
+                    pack["map_idx"] = self.map_idx
                 self.ws_send(pack)
             except:
                 pass
@@ -1755,8 +1770,13 @@ class Game:
         self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
 
         # --- WATERMARK ---
-        v_txt = self.font.render("v4.2 SYNC", True, (0, 255, 0))
+        v_txt = self.font.render("v5.0 SYNC", True, (0, 255, 0))
         self.screen.blit(v_txt, (self.W - 120, 20))
+        
+        # --- NET DEBUG LOGS ---
+        for i, log in enumerate(self.net_debug_logs):
+            lt = self.font.render(log, True, (0, 255, 255))
+            self.screen.blit(lt, (10, 10 + i * 20))
 
         # --- OUTROS AVISOS ---
         if self.player_has_key:
