@@ -761,27 +761,26 @@ class Game:
                 self.net_status = "CONECTADO"
                 self.ws = True
             
-            # Lê mensagens pendentes na fila JS de forma segura
+            # Lê mensagens pendentes da fila JS de forma segura (Máximo 5 por frame para evitar travamentos)
+            max_msgs = 5
             raw_msg = window.eval("window.doom_msg_queue ? window.doom_msg_queue.shift() : null")
-            while raw_msg:
+            while raw_msg and max_msgs > 0:
+                max_msgs -= 1
                 try:
                     self.net_packet_received = 0.2
                     self.net_msg_count += 1
                     data = json.loads(str(raw_msg))
                     self._process_network_data(data)
-                    # Log rápido
-                    m_type = data.get("type", "?")
-                    if m_type != "pos":
-                        self.net_debug_logs.append(f"REC: {m_type}")
-                        if len(self.net_debug_logs) > 5: self.net_debug_logs.pop(0)
-                    else:
-                        # Log de posição esporádico
-                        if self.net_msg_count % 30 == 0:
-                            self.net_debug_logs.append(f"REC: pos x{self.net_msg_count}")
+                    # Log rápido (apenas se não estiver em jogo intenso)
+                    if self.game_state != "PLAY":
+                        m_type = data.get("type", "?")
+                        if m_type != "pos":
+                            self.net_debug_logs.append(f"REC: {m_type}")
                             if len(self.net_debug_logs) > 5: self.net_debug_logs.pop(0)
                 except: pass
-                raw_msg = window.eval("window.doom_msg_queue ? window.doom_msg_queue.shift() : null")
-        except Exception as e:
+                if max_msgs > 0:
+                    raw_msg = window.eval("window.doom_msg_queue ? window.doom_msg_queue.shift() : null")
+        except:
             pass
 
     def _process_network_data(self, data):
@@ -794,10 +793,11 @@ class Game:
                     "x": data.get("x", 1.5), "y": data.get("y", 1.5), "ang": data.get("ang", 0)
                 }
             
-            # AUTO-REPARO: Se o Host enviou mapa/level e eu ainda não estou em PLAY, força entrada
-            if not getattr(self, "is_host", False) and self.game_state == "LOBBY":
-                if "level" in data and data.get("level", 0) > 0:
-                    self._process_network_data({"type": "start", "map_idx": data.get("map_idx",0), "level": data.get("level",1)})
+            # AUTO-REPARO: Se o Host enviou mapa/level e eu ainda não estou sincronizado, força entrada
+            if not getattr(self, "is_host", False):
+                h_level = data.get("level", 0)
+                if h_level > self.level: # Só sincroniza se for um level MAIOR que o meu
+                     self._process_network_data({"type": "start", "map_idx": data.get("map_idx",0), "level": h_level})
 
             if not getattr(self, "is_host", False) and "en" in data:
                 for i, enc in enumerate(data.get("en", [])):
@@ -1777,13 +1777,14 @@ class Game:
         self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
 
         # --- WATERMARK ---
-        v_txt = self.font.render("v6.0 SYNC", True, (0, 255, 0))
+        v_txt = self.font.render("v7.0 SYNC", True, (0, 255, 0))
         self.screen.blit(v_txt, (self.W - 120, 20))
         
         # --- NET DEBUG LOGS ---
-        for i, log in enumerate(self.net_debug_logs):
-            lt = self.font.render(log, True, (0, 255, 255))
-            self.screen.blit(lt, (10, 10 + i * 20))
+        if self.game_state != "PLAY":
+            for i, log in enumerate(self.net_debug_logs):
+                lt = self.font.render(log, True, (0, 255, 255))
+                self.screen.blit(lt, (10, 10 + i * 20))
 
         # --- OUTROS AVISOS ---
         if self.player_has_key:
