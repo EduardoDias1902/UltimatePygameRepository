@@ -472,9 +472,10 @@ class Game:
         self.is_host = False
         self.headshot_msg_timer = 0.0
         
-        # Multiplayer
+        # Multiplayer: Gera ID único usando tempo + random para evitar colisões no navegador
+        import time
+        self.player_id = f"P{int(time.time() * 1000) % 100000}{random.randint(100, 999)}"
         self.other_players = {}
-        self.player_id = str(random.randint(1000, 9999))
         self.network_task = None  # mantido para compatibilidade, não usado
         self.net_status = "DESCONECTADO"
         self.ws = None
