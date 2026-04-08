@@ -664,21 +664,28 @@ class Game:
         while True:
             self.net_status = "ACORDANDO..."
             try:
-                # Reinicia o estado no JS apenas se necessário
                 window.eval(f"""
                     if (!window.doom_ws || window.doom_ws.readyState !== 1) {{
+                        console.log("[WS] Iniciando nova conexão...");
                         if (window.doom_ws) window.doom_ws.close();
                         window.doom_ws = new WebSocket('{uri}');
                         window.doom_msg_queue = window.doom_msg_queue || [];
                         window.doom_is_ready = false;
                         window.doom_ws.onopen = () => {{ 
+                            console.log("[WS] Conectado!");
                             window.doom_is_ready = true;
                             window.doom_ws.send(JSON.stringify({{
                                 type: 'join', room: '{self.room_code}', id: '{self.player_id}'
                             }}));
                         }};
-                        window.doom_ws.onmessage = (e) => window.doom_msg_queue.push(e.data);
-                        window.doom_ws.onclose = () => {{ window.doom_is_ready = false; }};
+                        window.doom_ws.onmessage = (e) => {{
+                            console.log("[WS] Mensagem Recebida:", e.data);
+                            window.doom_msg_queue.push(e.data);
+                        }};
+                        window.doom_ws.onclose = () => {{ 
+                            console.log("[WS] Desconectado.");
+                            window.doom_is_ready = false; 
+                        }};
                     }}
                 """)
 
@@ -686,23 +693,26 @@ class Game:
                 for _ in range(60):
                     if window.eval("window.doom_is_ready"):
                         self.net_status = "CONECTADO"
-                        self.ws = True # Ativa envio no Python
+                        self.ws = True 
                         break
                     await asyncio.sleep(0.5)
                 
                 if self.net_status != "CONECTADO":
-                    raise Exception("Servidor não atende")
+                    raise Exception("Inativo")
 
                 # Loop de escuta ativo e contínuo
                 while window.eval("window.doom_is_ready"):
-                    # Verifica o tamanho da fila no JS
                     q_len = int(window.eval("window.doom_msg_queue.length"))
                     if q_len > 0:
                         for _ in range(q_len):
-                            msg_str = window.eval("window.doom_msg_queue.shift()")
-                            if msg_str:
-                                self._process_network_data(json.loads(str(msg_str)))
-                    await asyncio.sleep(0.01) # 100hz de leitura
+                            raw_val = window.eval("window.doom_msg_queue.shift()")
+                            if raw_val is not None and str(raw_val) != "undefined":
+                                try:
+                                    msg_str = str(raw_val)
+                                    self._process_network_data(json.loads(msg_str))
+                                except Exception as e:
+                                    print(f"Erro JSON: {e}")
+                    await asyncio.sleep(0.01) 
                     
             except Exception as e:
                 print(f"Erro na Rede: {e}")
@@ -746,8 +756,8 @@ class Game:
                     "type": "pos", "room": self.room_code, "id": self.player_id,
                     "x": round(self.player.x, 2), "y": round(self.player.y, 2), "ang": round(self.player.ang, 2)
                 })
-                # Envia via executando script no navegador
-                window.eval(f"if(window.doom_ws && window.doom_is_ready) window.doom_ws.send('{msg}');")
+                # Envia via executando script no navegador com Log para debug
+                window.eval(f"if(window.doom_ws && window.doom_is_ready) {{ window.doom_ws.send('{msg}'); }}")
             except:
                 pass
 
@@ -924,11 +934,14 @@ class Game:
                             self.is_host = True
                             self.room_code = "".join([str(random.randint(0,9)) for _ in range(4)])
                             self.game_state = "LOBBY"
-                            self.network_task = asyncio.create_task(self.network_loop())
+                            self.other_players = {} # Limpa para nova sala
+                            if not self.network_task or self.network_task.done():
+                                self.network_task = asyncio.create_task(self.network_loop())
                         elif sel == "ENTRAR EM SALA":
                             self.is_host = False
                             self.input_text = ""
                             self.game_state = "JOIN_ROOM"
+                            self.other_players = {} # Limpa para nova sala
 
             elif self.game_state == "JOIN_ROOM":
                 if event.type == pygame.KEYDOWN:
@@ -940,7 +953,8 @@ class Game:
                         if len(self.input_text) > 0:
                             self.room_code = self.input_text
                             self.game_state = "LOBBY"
-                            self.network_task = asyncio.create_task(self.network_loop())
+                            if not self.network_task or self.network_task.done():
+                                self.network_task = asyncio.create_task(self.network_loop())
                     else:
                         if len(self.input_text) < 4 and event.unicode.isalnum():
                             self.input_text += event.unicode.upper()
