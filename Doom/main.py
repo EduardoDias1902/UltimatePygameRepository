@@ -680,10 +680,12 @@ class Game:
                     self._update(dt)
                     self._render()
                 
-                # Envia posição se em jogo e conectado
-                if self.game_state == "PLAY" and self.room_code and self.ws:
+                # Envia posição se em jogo ou Lobby (para descoberta)
+                if self.game_state in ("LOBBY", "PLAY") and self.room_code and getattr(self, "ws", False):
                     self.net_timer += dt
-                    if self.net_timer > 0.05: # Limita a ~20 FPS para não sobrecarregar o websocket
+                    # No lobby enviamos mais devagar (0.2s) para não saturar
+                    rate = 0.2 if self.game_state == "LOBBY" else 0.05
+                    if self.net_timer > rate: 
                         self.net_timer = 0.0
                         self._send_pos()
 
@@ -1000,9 +1002,14 @@ class Game:
         # Mostrar contagem de jogadores
         count = len(self.other_players) + 1
         players_txt = self.font.render(f"JOGADORES CONECTADOS: {count}", True, (0, 255, 0))
-        self.screen.blit(players_txt, (self.W//2 - players_txt.get_width()//2, 300))
+        self.screen.blit(players_txt, (self.W//2 - players_txt.get_width()//2, 280))
         
-        net_txt = self.font.render(f"REDE: {self.net_status}", True, (150, 150, 255))
+        # Lista os IDs dos outros
+        for i, other_id in enumerate(self.other_players.keys()):
+            id_txt = self.font.render(f" - {other_id}", True, (0, 200, 255))
+            self.screen.blit(id_txt, (self.W//2 - id_txt.get_width()//2, 310 + i * 25))
+
+        net_txt = self.font.render(f"REDE: {self.net_status} (Msgs: {self.net_msg_count})", True, (150, 150, 255))
         self.screen.blit(net_txt, (10, self.H - 30))
         
         
@@ -1770,7 +1777,7 @@ class Game:
         self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
 
         # --- WATERMARK ---
-        v_txt = self.font.render("v5.0 SYNC", True, (0, 255, 0))
+        v_txt = self.font.render("v6.0 SYNC", True, (0, 255, 0))
         self.screen.blit(v_txt, (self.W - 120, 20))
         
         # --- NET DEBUG LOGS ---
