@@ -1707,6 +1707,10 @@ class Game:
         ammo_txt = self.font.render(f"AMMO: {self.player.ammo}", True, (255, 215, 0))
         self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
 
+        # --- WATERMARK ---
+        v_txt = self.font.render("v3.0 SYNC", True, (0, 255, 0))
+        self.screen.blit(v_txt, (self.W - 120, 20))
+
         # --- OUTROS AVISOS ---
         if self.player_has_key:
             msg = self.font.render("CHAVE COLETADA! VÁ AO PORTAL", True, (255, 255, 0))
