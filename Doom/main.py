@@ -479,6 +479,7 @@ class Game:
         self.net_status = "DESCONECTADO"
         self.ws = None
         self.net_initialized = False  # Flag para o novo sistema de rede
+        self.net_timer = 0.0
         
         self.mira_x = self.W // 2
         self.mira_y = self.H // 2
@@ -521,6 +522,13 @@ class Game:
 
     def _next_level(self):
         self.level += 1
+        
+        # Sincroniza a semente (seed) do gerador de aleatoriedade usando a sala e nível atuais
+        # Isso garante que inimigos e itens sejam spawnados exatamente nos mesmos lugares!
+        if getattr(self, "room_code", ""):
+            base_seed = self.level + sum(ord(c) for c in self.room_code)
+            random.seed(base_seed)
+            
         if self.level == 4:
             self.wep_msg_timer = 3.0
             self.player.ammo += 100
@@ -607,6 +615,15 @@ class Game:
             self.portal_pos = random.choice(free_spots)
         else:
             self.portal_pos = (self.player.x, self.player.y)
+            
+        # Transmite aos clientes se avançou de nível durante o jogo
+        if getattr(self, "is_host", False) and getattr(self, "game_state", "") == "PLAY":
+            self.ws_send({
+                "type": "start",
+                "room": self.room_code,
+                "map_idx": self.map_idx,
+                "level": self.level
+            })
 
     def _setup_mouse(self):
         try:
@@ -655,7 +672,10 @@ class Game:
                 
                 # Envia posição se em jogo e conectado
                 if self.game_state == "PLAY" and self.room_code and self.ws:
-                    self._send_pos()
+                    self.net_timer += dt
+                    if self.net_timer > 0.05: # Limita a ~20 FPS para não sobrecarregar o websocket
+                        self.net_timer = 0.0
+                        self._send_pos()
 
                 await asyncio.sleep(0)
         except Exception as e:
@@ -774,26 +794,31 @@ class Game:
                 print(f"[NET] Jogador saiu: {p_id}")
                 del self.other_players[p_id]
         elif msg_type == "start":
-            print("[NET] Partida iniciada pelo Host!")
-            # Sincroniza o mapa e nivel com o host
+            print("[NET] Partida iniciada/avançada pelo Host!")
             host_map = data.get("map_idx", 0)
             host_level = data.get("level", 1)
-            if host_map != self.map_idx:
-                self.map_idx = host_map
-                self.world = World(self.maps[self.map_idx])
-                # Atualiza texturas para o mapa correto
-                if self.map_idx == 1:
-                    self.tex_wall = self.tex_wall_jungle
-                    self.tex_enemy_frames = self.tex_enemy_v2
-                    self.tex_boss_frames = self.tex_boss_v2
-                    self.tex_floor = self.tex_floor_jungle
-                    self.tex_ceiling = self.tex_ceiling_jungle
-                else:
-                    self.tex_wall = self.tex_wall_def
-                    self.tex_enemy_frames = self.tex_enemy_def
-                    self.tex_boss_frames = self.tex_boss_def
-                    self.tex_floor = self.tex_floor_def
-                    self.tex_ceiling = self.tex_ceiling_def
+            
+            # Para re-gerar exatamente os mesmos inimigos, nós manipulamos o level e recriamos via _next_level
+            self.level = host_level - 1
+            self.map_idx = host_map
+            self._next_level()
+            self.map_idx = host_map # Previne que next_level altere o map incorretamente
+            
+            self.world = World(self.maps[self.map_idx])
+            # Atualiza texturas para o mapa correto
+            if self.map_idx == 1:
+                self.tex_wall = self.tex_wall_jungle
+                self.tex_enemy_frames = self.tex_enemy_v2
+                self.tex_boss_frames = self.tex_boss_v2
+                self.tex_floor = self.tex_floor_jungle
+                self.tex_ceiling = self.tex_ceiling_jungle
+            else:
+                self.tex_wall = self.tex_wall_def
+                self.tex_enemy_frames = self.tex_enemy_def
+                self.tex_boss_frames = self.tex_boss_def
+                self.tex_floor = self.tex_floor_def
+                self.tex_ceiling = self.tex_ceiling_def
+                
             self.level = host_level
             self.player.x, self.player.y = 1.5, 1.5
             self.game_state = "PLAY"
