@@ -523,6 +523,12 @@ class Game:
     def _next_level(self):
         self.level += 1
         
+        # FIX Crítico de Sincronização: Força o jogador temporariamente para a origem 
+        # ANTES de calcular free_spots. Isso garante que a "zona morta" de 3.0 tiles
+        # ao redor do jogador seja exatamente a mesma para Host e Client, 
+        # resultando no MESMO ARRAY de free_spots, e consequentemente no mesmo spawn de inimigos!
+        self.player.x, self.player.y = 1.5, 1.5
+        
         # Sincroniza a semente (seed) do gerador de aleatoriedade usando a sala e nível atuais
         # Isso garante que inimigos e itens sejam spawnados exatamente nos mesmos lugares!
         if getattr(self, "room_code", ""):
