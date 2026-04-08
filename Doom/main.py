@@ -631,6 +631,13 @@ class Game:
             while True:
                 dt = self.clock.tick(60) / 1000.0
                 self._handle_events()
+                
+                # Gerenciamento da task de rede: inicia se no Lobby e ainda não está rodando
+                if self.game_state in ("LOBBY", "PLAY") and self.room_code:
+                    if not self.network_task or self.network_task.done():
+                        print(f"Iniciando network_loop para sala {self.room_code}")
+                        self.network_task = asyncio.create_task(self.network_loop())
+                
                 if self.game_state == "MENU":
                     self._render_menu()
                 elif self.game_state == "CREDITS":
@@ -940,15 +947,14 @@ class Game:
                         if sel == "CRIAR SALA":
                             self.is_host = True
                             self.room_code = "".join([str(random.randint(0,9)) for _ in range(4)])
+                            self.other_players = {}
                             self.game_state = "LOBBY"
-                            self.other_players = {} # Limpa para nova sala
-                            if not self.network_task or self.network_task.done():
-                                self.network_task = asyncio.create_task(self.network_loop())
+                            # A task de rede será iniciada automaticamente no run()
                         elif sel == "ENTRAR EM SALA":
                             self.is_host = False
                             self.input_text = ""
+                            self.other_players = {}
                             self.game_state = "JOIN_ROOM"
-                            self.other_players = {} # Limpa para nova sala
 
             elif self.game_state == "JOIN_ROOM":
                 if event.type == pygame.KEYDOWN:
@@ -960,8 +966,7 @@ class Game:
                         if len(self.input_text) > 0:
                             self.room_code = self.input_text
                             self.game_state = "LOBBY"
-                            if not self.network_task or self.network_task.done():
-                                self.network_task = asyncio.create_task(self.network_loop())
+                            # A task de rede será iniciada automaticamente no run()
                     else:
                         if len(self.input_text) < 4 and event.unicode.isalnum():
                             self.input_text += event.unicode.upper()
