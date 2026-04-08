@@ -1423,7 +1423,7 @@ class Game:
         pygame.draw.rect(self.screen, floor_clr_full, (0, int(horizon), self.W, self.H - int(horizon)))
 
         cols = self.W // self.render_scale
-        zbuf = [0.0] * cols
+        zbuf = [999.0] * cols
 
         for col in range(cols):
             cam_x = (2 * col / max(1, cols - 1) - 1.0)
@@ -1506,12 +1506,16 @@ class Game:
                     tex = self.tex_portal[f_idx] if self.player_has_key else self.tex_portal_red[f_idx]
                     scale = 2.0
                 elif obj == "player":
-                    # Recria o cache se necessário (para pegar a skin do mapa atual)
-                    self.tex_player_cache = self.tex_enemy_frames[0].copy()
-                    tint = pygame.Surface(self.tex_player_cache.get_size(), pygame.SRCALPHA)
-                    tint.fill((0, 255, 0, 120))
-                    self.tex_player_cache.blit(tint, (0,0), special_flags=pygame.BLEND_RGBA_ADD)
-                    tex = self.tex_player_cache
+                    # Recria a skin do jogador sempre (para evitar bugs de cache em trocas de mapa)
+                    base_surf = getattr(self, "tex_enemy_frames", [None])[0]
+                    if base_surf:
+                        self.tex_player_cache = base_surf.copy()
+                        tint = pygame.Surface(self.tex_player_cache.get_size(), pygame.SRCALPHA)
+                        tint.fill((0, 255, 100, 160)) # Verde vibrante
+                        self.tex_player_cache.blit(tint, (0,0), special_flags=pygame.BLEND_RGBA_ADD)
+                        tex = self.tex_player_cache
+                    else:
+                        tex = self.tex_wall # Fallback
                     scale = 0.8
                 
                 hw, hh = size * 0.7 * scale, size * 0.7 * scale
