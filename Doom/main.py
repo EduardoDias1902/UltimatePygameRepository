@@ -480,6 +480,8 @@ class Game:
         self.ws = None
         self.net_initialized = False  # Flag para o novo sistema de rede
         self.net_timer = 0.0
+        self.net_packet_received = 0.0 # Timer para piscar bolinha de rede
+        self.net_msg_count = 0 
         
         self.mira_x = self.W // 2
         self.mira_y = self.H // 2
@@ -763,6 +765,8 @@ class Game:
                         raw_str = str(raw)
                         if raw_str and raw_str != "undefined" and raw_str != "None":
                             try:
+                                self.net_packet_received = 0.2 # Pisca bolinha verde
+                                self.net_msg_count += 1
                                 self._process_network_data(json.loads(raw_str))
                             except Exception as e:
                                 print(f"[NET] JSON parse error: {e} | raw: {raw_str[:80]}")
@@ -845,6 +849,9 @@ class Game:
                      self.enemies[idx].state = "dying"
                      self.enemies[idx].frame = 0
                      self.enemies[idx].anim_timer = 0.0
+        elif msg_type == "grenade":
+            # Outro jogador atirou uma granada
+            self.grenades_list.append(Grenade(data["x"], data["y"], -0.2, data["vx"], data["vy"], -3.0, fuse=1.5))
         elif msg_type == "item":
             idx = data.get("idx")
             if idx is not None and 0 <= idx < len(self.items):
@@ -867,12 +874,14 @@ class Game:
                 pass
 
     def ws_send(self, data_dict):
-        """Ponte robusta para enviar qualquer dado ao servidor via JavaScript"""
+        """Ponte robusta para enviar dados ao JS sem bugs de aspas"""
         try:
             from platform import window
-            # Usa json.dumps e passa como string JS - JSON não contém aspas simples
-            msg = json.dumps(data_dict)
-            window.eval(f"if(window.doom_ws&&window.doom_is_ready)window.doom_ws.send('{msg}');")
+            import base64
+            # Codifica em Base64 para evitar QUALQUER problema com aspas ou caracteres especiais no eval()
+            msg_json = json.dumps(data_dict)
+            msg_b64 = base64.b64encode(msg_json.encode()).decode()
+            window.eval(f"if(window.doom_ws&&window.doom_is_ready)window.doom_ws.send(atob('{msg_b64}'));")
         except:
             pass
 
@@ -964,6 +973,9 @@ class Game:
         
         code_msg = self.font.render(f"CÓDIGO DA SALA: {self.room_code}", True, (255, 255, 0))
         self.screen.blit(code_msg, (self.W//2 - code_msg.get_width()//2, 120))
+
+        id_msg = self.font.render(f"SEU ID: {self.player_id}", True, (200, 200, 200))
+        self.screen.blit(id_msg, (self.W//2 - id_msg.get_width()//2, 150))
         
         status = self.font.render("AGUARDANDO JOGADORES...", True, (200, 200, 200))
         self.screen.blit(status, (self.W//2 - status.get_width()//2, 230))
@@ -1613,6 +1625,13 @@ class Game:
             vy = math.sin(self.player.ang) * spd
             # z = -0.2 (mão), vz = -3.0 (arco mais baixo)
             self.grenades_list.append(Grenade(self.player.x, self.player.y, -0.2, vx, vy, -3.0, fuse=1.5))
+            # Sincronização via Rede
+            if getattr(self, "ws", False) and getattr(self, "room_code", ""):
+                 self.ws_send({
+                     "type": "grenade", "room": self.room_code,
+                     "x": self.player.x, "y": self.player.y,
+                     "vx": vx, "vy": vy
+                 })
 
     def _update_grenades(self, dt):
         for g in self.grenades_list[:]:
@@ -1760,6 +1779,13 @@ class Game:
            pygame.draw.line(self.screen, (255, 255, 255), (self.mira_x - 10, self.mira_y), (self.mira_x + 10, self.mira_y), 1)
            pygame.draw.line(self.screen, (255, 255, 255), (self.mira_x, self.mira_y - 10), (self.mira_x, self.mira_y + 10), 1)
            
+        # --- INDICADOR DE REDE (DEBUG) ---
+        if self.net_packet_received > 0:
+            self.net_packet_received -= 0.016 # dt aproximado
+            pygame.draw.circle(self.screen, (0, 255, 0), (self.W - 20, 20), 8)
+        else:
+            pygame.draw.circle(self.screen, (100, 0, 0), (self.W - 20, 20), 8)
+            
         if self.player.hp <= 30:
             ov = pygame.Surface((self.W, self.H), pygame.SRCALPHA)
             ov.fill((120, 0, 0, int(60*(1+math.sin(pygame.time.get_ticks()*0.01)))))
