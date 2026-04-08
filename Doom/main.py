@@ -1067,14 +1067,8 @@ class Game:
                     if event.key == pygame.K_ESCAPE:
                         self.game_state = "CUSTOM_ROOM"
                     if event.key == pygame.K_RETURN and self.is_host:
-                        # Enviar comando de início com mapa e nível para sincronização
-                        self.ws_send({
-                            "type": "start",
-                            "room": self.room_code,
-                            "map_idx": self.map_idx,
-                            "level": self.level
-                        })
                         self.game_state = "PLAY"
+                        self._next_level() # <-- Chama next_level antes! O envio ws_send() ocorrerá automaticamente dentro do _next_level!
 
             elif self.game_state in ("CREDITS", "FRIENDS"):
                 if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_SPACE):
