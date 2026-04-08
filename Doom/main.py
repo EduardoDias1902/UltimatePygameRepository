@@ -779,6 +779,14 @@ class Game:
                 self.other_players[p_id] = {
                     "x": data.get("x", 1.5), "y": data.get("y", 1.5), "ang": data.get("ang", 0)
                 }
+            if not getattr(self, "is_host", False) and "en" in data:
+                for i, enc in enumerate(data.get("en", [])):
+                    if i < len(self.enemies) and self.enemies[i].state != "dying":
+                        self.enemies[i].x = enc[0]
+                        self.enemies[i].y = enc[1]
+                        self.enemies[i].hp = enc[2]
+                        if self.enemies[i].state != "dying":
+                            self.enemies[i].state = enc[3]
         elif msg_type == "player_joined":
             p_id = data.get("id")
             if p_id and p_id != self.player_id:
@@ -1242,11 +1250,37 @@ class Game:
                             self.key_pos = (e.x, e.y)
                 continue
 
-            e.cooldown = max(0.0, e.cooldown - dt)
-            dx, dy = px - e.x, py - e.y
-            dist = math.hypot(dx, dy)
+            if not getattr(self, "is_host", False):
+                if e.state == "chase":
+                    e.anim_timer += dt
+                    if e.is_boss:
+                        if e.anim_timer > 0.02:
+                            e.anim_timer = 0.0
+                            e.frame = (e.frame + 1) % max(1, len(self.tex_boss_frames))
+                    else:
+                        anim_thresh = 0.06 if e.subtype == "v2" else 0.12
+                        if e.anim_timer > anim_thresh:
+                            e.anim_timer = 0.0
+                            e.frame = (e.frame + 1) % max(1, len(self.tex_enemy_frames))
+                continue
 
-            if dist < 12.0 and line_of_sight(self.world, e.x, e.y, px, py):
+            e.cooldown = max(0.0, e.cooldown - dt)
+            
+            targets = [(px, py)]
+            for pd in self.other_players.values():
+                 targets.append((pd["x"], pd["y"]))
+            
+            best_t = targets[0]
+            best_d = math.hypot(e.x - best_t[0], e.y - best_t[1])
+            for t in targets[1:]:
+                 d = math.hypot(e.x - t[0], e.y - t[1])
+                 if d < best_d:
+                     best_d, best_t = d, t
+                     
+            dx, dy = best_t[0] - e.x, best_t[1] - e.y
+            dist = best_d
+
+            if dist < 12.0 and line_of_sight(self.world, e.x, e.y, best_t[0], best_t[1]):
                 e.state = "chase"
             elif dist > 15.0:
                 e.state = "idle"
@@ -1273,17 +1307,18 @@ class Game:
                     elif not self.world.is_blocked(e.x, ny): e.y = ny
 
             atk_dist = 4.5 if e.is_boss else 2.2
-            if dist < atk_dist and e.cooldown <= 0.0 and line_of_sight(self.world, e.x, e.y, px, py):
+            if dist < atk_dist and e.cooldown <= 0.0 and line_of_sight(self.world, e.x, e.y, best_t[0], best_t[1]):
                 # Habilidade Especial Boss nlv2: Tiro de Energia
                 if e.is_boss and e.subtype == "v2" and dist > 3.0:
                     e.cooldown = 1.5
-                    v_dir = pygame.Vector2(px - e.x, py - e.y).normalize() * 6.5
+                    v_dir = pygame.Vector2(best_t[0] - e.x, best_t[1] - e.y).normalize() * 6.5
                     self.projectiles.append(Projectile(e.x, e.y, v_dir.x, v_dir.y))
                 else:
                     e.cooldown = random.uniform(0.6, 1.1) if e.is_boss else random.uniform(0.7, 1.3)
-                    if random.random() < 0.55:
-                        self.player.hp -= random.randint(15, 30) if e.is_boss else random.randint(2, 6)
-                        self.shake = min(1.0, self.shake + (1.2 if e.is_boss else 0.6))
+                    if best_t == (px, py):
+                        if random.random() < 0.55:
+                            self.player.hp -= random.randint(15, 30) if e.is_boss else random.randint(2, 6)
+                            self.shake = min(1.0, self.shake + (1.2 if e.is_boss else 0.6))
 
         if self.player.hp <= 0:
             self.player.x, self.player.y, self.player.ang = 2.5, 2.5, 0.0
@@ -1466,7 +1501,10 @@ class Game:
                     tex = self.tex_portal[f_idx] if self.player_has_key else self.tex_portal_red[f_idx]
                     scale = 2.0
                 elif obj == "player":
-                    tex = self.tex_enemy_frames[0]
+                    if not hasattr(self, "tex_player_cache"):
+                        self.tex_player_cache = self.tex_enemy_frames[0].copy()
+                        self.tex_player_cache.fill((50, 255, 50, 255), special_flags=pygame.BLEND_RGBA_MULT)
+                    tex = self.tex_player_cache
                     scale = 0.8
                 
                 hw, hh = size * 0.7 * scale, size * 0.7 * scale
