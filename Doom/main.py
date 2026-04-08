@@ -822,6 +822,20 @@ class Game:
             self.level = host_level
             self.player.x, self.player.y = 1.5, 1.5
             self.game_state = "PLAY"
+        elif msg_type == "hit":
+            idx = data.get("idx")
+            dmg = data.get("dmg")
+            if idx is not None and 0 <= idx < len(self.enemies):
+                self.enemies[idx].hp -= dmg
+                if self.enemies[idx].hp <= 0 and self.enemies[idx].alive:
+                     self.enemies[idx].state = "dying"
+                     self.enemies[idx].frame = 0
+                     self.enemies[idx].anim_timer = 0.0
+        elif msg_type == "item":
+            idx = data.get("idx")
+            if idx is not None and 0 <= idx < len(self.items):
+                 self.items[idx].active = False
+                 self.items[idx].timer = 20.0
 
 
     def _send_pos(self):
@@ -1205,6 +1219,12 @@ class Game:
                         self.heal_flash = 0.5
                     it.active = False
                     it.timer = 20.0
+                    
+                    if getattr(self, "room_code", "") and getattr(self, "ws", False):
+                        try:
+                            idx = self.items.index(it)
+                            self.ws_send({"type": "item", "room": self.room_code, "idx": idx})
+                        except ValueError: pass
 
         for e in self.enemies:
             if not e.alive: continue
@@ -1329,6 +1349,14 @@ class Game:
                 self.headshot_msg_timer = 1.0
 
             best.hp -= dmg
+            
+            if getattr(self, "room_code", "") and getattr(self, "ws", False):
+                try: 
+                    idx = self.enemies.index(best)
+                    self.ws_send({"type": "hit", "room": self.room_code, "idx": idx, "dmg": dmg})
+                except ValueError:
+                    pass
+            
             self.hit_marker = 1.0
             p_count = 24 if best_headshot else 8
             for _ in range(p_count):
@@ -1411,7 +1439,7 @@ class Game:
 
             pt_x = (0.5 + rel / self.fov) * self.W + sx
             size = (self.H / dist)
-            if isinstance(obj, (Enemy, Item, Grenade)) or obj in ("key", "portal"):
+            if isinstance(obj, (Enemy, Item, Grenade)) or obj in ("key", "portal", "player"):
                 if isinstance(obj, Enemy):
                     scale = obj.scale
                     if obj.state == "dying":
@@ -1558,7 +1586,15 @@ class Game:
             if e.alive:
                 d = math.hypot(e.x-ex, e.y-ey)
                 if d < radius:
-                    e.hp -= damage * (1.0 - d/radius)
+                    dmg = damage * (1.0 - d/radius)
+                    e.hp -= dmg
+                    
+                    if getattr(self, "room_code", "") and getattr(self, "ws", False):
+                        try:
+                            idx = self.enemies.index(e)
+                            self.ws_send({"type": "hit", "room": self.room_code, "idx": idx, "dmg": dmg})
+                        except ValueError: pass
+                        
                     if e.hp <= 0: e.state = "dying"; e.frame = 0
                     self.hit_marker = 0.5
         for _ in range(30):
