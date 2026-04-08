@@ -854,13 +854,15 @@ class Game:
 
     def _send_pos(self):
         """Envia posição atual para o servidor via Bridge JS"""
-        if self.ws and self.room_code:
+        if getattr(self, "ws", False) and getattr(self, "room_code", ""):
             try:
-                msg_dict = {
+                pack = {
                     "type": "pos", "room": self.room_code, "id": self.player_id,
                     "x": round(self.player.x, 2), "y": round(self.player.y, 2), "ang": round(self.player.ang, 2)
                 }
-                self.ws_send(msg_dict)
+                if getattr(self, "is_host", False):
+                    pack["en"] = [[round(e.x, 2), round(e.y, 2), float(e.hp), e.state] for e in self.enemies]
+                self.ws_send(pack)
             except:
                 pass
 
@@ -1470,7 +1472,10 @@ class Game:
 
         for dist, ex, ey, obj in sprites:
             rel = wrap_angle(math.atan2(ey - py, ex - px) - pa)
-            if abs(rel) > self.fov * 0.7 or dist < 0.2: continue
+            # A profundidade para o Z-buffer deve ser a distância perpendicular (corrigida)
+            sprite_wd = dist * math.cos(rel)
+            
+            if abs(rel) > self.fov * 0.8: continue
 
             pt_x = (0.5 + rel / self.fov) * self.W + sx
             size = (self.H / dist)
@@ -1524,7 +1529,7 @@ class Game:
                 
                 for x in range(max(0, x_start), min(self.W, x_end)):
                     ci = x // self.render_scale
-                    if 0 <= ci < cols and zbuf[ci] < dist: continue
+                    if 0 <= ci < cols and zbuf[ci] < sprite_wd: continue
                     tex_x = min(x - x_start, int(hw) - 1)
                     strip = scaled_tex.subsurface((tex_x, 0, 1, int(hh)))
                     self.screen.blit(strip, (x, int(top)))
