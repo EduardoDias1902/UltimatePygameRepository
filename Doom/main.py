@@ -656,65 +656,52 @@ class Game:
             traceback.print_exc()
 
     async def network_loop(self):
-        """Loop de rede ultra-resistente (JS Native Bridge)"""
-        if self.network_task and not self.network_task.done():
-            self.network_task.cancel()
-            
+        """Loop de rede via JS Native (Focando em velocidade de resposta)"""
         uri = "wss://doom-multiplayer.onrender.com"
         
         while True:
-            self.net_status = "ACORDANDO SERVIDOR..."
+            self.net_status = "ACORDANDO..."
             try:
-                import platform
-                if platform.system() == 'Emscripten':
-                    from platform import window
-                    # Criar via Javascript puro para evitar problemas de proxy
-                    window.eval(f"""
-                        if (window.doom_ws) window.doom_ws.close();
-                        window.doom_ws = new WebSocket('{uri}');
-                        window.doom_msg_queue = [];
-                        window.doom_ws.onmessage = (e) => window.doom_msg_queue.push(e.data);
-                        window.doom_ws.onopen = () => {{
-                            window.doom_ws.send(JSON.stringify({{
-                                type: 'join', room: '{self.room_code}', id: '{self.player_id}'
-                            }}));
-                        }};
-                    """)
-                    
-                    # Esperar conexão ou falha (até 60s)
-                    timeout = 60
-                    while timeout > 0:
-                        state = int(window.eval("window.doom_ws.readyState"))
-                        if state == 1:
-                            self.net_status = "CONECTADO"
-                            break
-                        elif state > 1:
-                            raise Exception(f"Falha JS (State {state})")
-                        await asyncio.sleep(1)
-                        timeout -= 1
-                    
-                    if timeout <= 0: 
-                        state = int(window.eval("window.doom_ws.readyState"))
-                        raise Exception(f"Timeout (State {state})")
+                from platform import window
+                window.eval(f"""
+                    if (window.doom_ws) window.doom_ws.close();
+                    window.doom_ws = new WebSocket('{uri}');
+                    window.doom_msg_queue = [];
+                    window.doom_is_ready = false;
+                    window.doom_ws.onopen = () => {{ 
+                        window.doom_is_ready = true;
+                        window.doom_ws.send(JSON.stringify({{
+                            type: 'join', room: '{self.room_code}', id: '{self.player_id}'
+                        }}));
+                    }};
+                    window.doom_ws.onmessage = (e) => window.doom_msg_queue.push(e.data);
+                    window.doom_ws.onclose = () => window.doom_is_ready = false;
+                """)
 
-                    while int(window.eval("window.doom_ws.readyState")) == 1:
-                        q_len = int(window.eval("window.doom_msg_queue.length"))
+                # Espera o rádio ligar
+                for _ in range(60):
+                    if window.eval("window.doom_is_ready"):
+                        self.net_status = "CONECTADO"
+                        break
+                    await asyncio.sleep(1)
+                
+                if self.net_status != "CONECTADO":
+                    raise Exception("Servidor não atende")
+
+                # Loop de escuta ativo
+                while window.eval("window.doom_is_ready"):
+                    msgs = window.eval("window.doom_msg_queue")
+                    if msgs and int(msgs.length) > 0:
+                        q_len = int(msgs.length)
                         for _ in range(q_len):
                             msg_str = str(window.eval("window.doom_msg_queue.shift()"))
                             self._process_network_data(json.loads(msg_str))
-                        await asyncio.sleep(0.05)
-                else:
-                    import websockets
-                    async with websockets.connect(uri) as websocket:
-                        self.ws = websocket
-                        self.net_status = "CONECTADO"
-                        await websocket.send(json.dumps({"type": "join", "room": self.room_code, "id": self.player_id}))
-                        async for message in websocket:
-                            self._process_network_data(json.loads(message))
+                    await asyncio.sleep(0.01) # 100hz de rede
+                    
             except Exception as e:
-                print(f"Tentando reconectar: {e}")
                 self.net_status = "ERR: RE-TENTANDO..."
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
+
 
 
 

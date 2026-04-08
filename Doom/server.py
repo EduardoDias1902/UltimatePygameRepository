@@ -2,8 +2,9 @@ import asyncio
 import websockets
 import json
 
-# Dicionário para guardar as salas: { "código": [lista_de_conexoes] }
+# Dicionários de estado global
 rooms = {}
+player_data = {}
 
 async def handler(websocket):
     room_id = None
@@ -11,17 +12,21 @@ async def handler(websocket):
         async for message in websocket:
             data = json.loads(message)
             
-            # Quando um jogador entra na sala
             if data["type"] == "join":
                 room_id = data["room"]
                 p_id = data.get("id", "??")
+                player_data[websocket] = p_id
+                
                 if room_id not in rooms:
                     rooms[room_id] = []
                 
-                # Avisar quem já está na sala que alguém novo entrou
-                msg_join = json.dumps({"type": "player_joined", "id": p_id})
+                # Sincronização de IDs: Todo mundo se conhece
                 for client in rooms[room_id]:
-                    await client.send(msg_join)
+                    # Veterano avisa o novato que ele existe
+                    veteran_id = player_data.get(client, "??")
+                    await websocket.send(json.dumps({"type": "player_joined", "id": veteran_id}))
+                    # Novato avisa o veterano que ele chegou
+                    await client.send(json.dumps({"type": "player_joined", "id": p_id}))
                     
                 rooms[room_id].append(websocket)
                 print(f"Jogador {p_id} entrou na sala: {room_id}")
