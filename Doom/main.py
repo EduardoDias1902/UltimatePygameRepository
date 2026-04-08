@@ -656,7 +656,7 @@ class Game:
             traceback.print_exc()
 
     async def network_loop(self):
-        """Loop de rede ultra-resistente com RE-TENTATIVA"""
+        """Loop de rede ultra-resistente (JS Native Bridge)"""
         if self.network_task and not self.network_task.done():
             self.network_task.cancel()
             
@@ -668,29 +668,34 @@ class Game:
                 import platform
                 if platform.system() == 'Emscripten':
                     from platform import window
-                    self.ws = window.WebSocket.new(uri)
-                    window.eval("window.doom_msg_queue = [];")
-                    self.ws.onmessage = window.eval("(event) => { window.doom_msg_queue.push(event.data); }")
-                    
-                    join_msg = json.dumps({"type": "join", "room": self.room_code, "id": self.player_id})
-                    window.eval(f"window.doom_ws_join = '{join_msg}';")
-                    self.ws.onopen = window.eval("(e) => { e.target.send(window.doom_ws_join); }")
+                    # Criar via Javascript puro para evitar problemas de proxy
+                    window.eval(f"""
+                        if (window.doom_ws) window.doom_ws.close();
+                        window.doom_ws = new WebSocket('{uri}');
+                        window.doom_msg_queue = [];
+                        window.doom_ws.onmessage = (e) => window.doom_msg_queue.push(e.data);
+                        window.doom_ws.onopen = () => {{
+                            window.doom_ws.send(JSON.stringify({{
+                                type: 'join', room: '{self.room_code}', id: '{self.player_id}'
+                            }}));
+                        }};
+                    """)
                     
                     # Esperar conexão ou falha (até 60s)
                     timeout = 60
                     while timeout > 0:
-                        state = int(self.ws.readyState)
+                        state = int(window.eval("window.doom_ws.readyState"))
                         if state == 1:
                             self.net_status = "CONECTADO"
                             break
                         elif state > 1:
-                            raise Exception("Link quebrado")
+                            raise Exception("Falha JS")
                         await asyncio.sleep(1)
                         timeout -= 1
                     
                     if timeout <= 0: raise Exception("Timeout")
 
-                    while int(self.ws.readyState) == 1:
+                    while int(window.eval("window.doom_ws.readyState")) == 1:
                         q_len = int(window.eval("window.doom_msg_queue.length"))
                         for _ in range(q_len):
                             msg_str = str(window.eval("window.doom_msg_queue.shift()"))
@@ -708,6 +713,7 @@ class Game:
                 print(f"Tentando reconectar: {e}")
                 self.net_status = "ERR: RE-TENTANDO..."
                 await asyncio.sleep(3)
+
 
 
     def _process_network_data(self, data):
