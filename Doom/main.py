@@ -1252,7 +1252,9 @@ class Game:
                             self.key_pos = (e.x, e.y)
                 continue
 
-            if not getattr(self, "is_host", False):
+            # A IA só roda se for o Host OU se estiver jogando Sozinho (sem sala)
+            is_effectively_host = getattr(self, "is_host", False) or not getattr(self, "room_code", "")
+            if not is_effectively_host:
                 if e.state == "chase":
                     e.anim_timer += dt
                     if e.is_boss:
@@ -1282,9 +1284,9 @@ class Game:
             dx, dy = best_t[0] - e.x, best_t[1] - e.y
             dist = best_d
 
-            if dist < 12.0 and line_of_sight(self.world, e.x, e.y, best_t[0], best_t[1]):
+            if dist < 20.0 and line_of_sight(self.world, e.x, e.y, best_t[0], best_t[1]):
                 e.state = "chase"
-            elif dist > 15.0:
+            elif dist > 25.0:
                 e.state = "idle"
 
             if e.state == "chase" and dist > 1.2:
