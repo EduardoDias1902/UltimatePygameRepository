@@ -477,6 +477,7 @@ class Game:
         self.player_id = str(random.randint(1000, 9999))
         self.network_task = None
         self.net_status = "DESCONECTADO"
+        self.ws = None # Será usado como flag de "pronto para enviar"
         
         self.mira_x = self.W // 2
         self.mira_y = self.H // 2
@@ -658,48 +659,55 @@ class Game:
     async def network_loop(self):
         """Loop de rede via JS Native (Focando em velocidade de resposta)"""
         uri = "wss://doom-multiplayer.onrender.com"
+        from platform import window
         
         while True:
             self.net_status = "ACORDANDO..."
             try:
-                from platform import window
+                # Reinicia o estado no JS apenas se necessário
                 window.eval(f"""
-                    if (window.doom_ws) window.doom_ws.close();
-                    window.doom_ws = new WebSocket('{uri}');
-                    window.doom_msg_queue = [];
-                    window.doom_is_ready = false;
-                    window.doom_ws.onopen = () => {{ 
-                        window.doom_is_ready = true;
-                        window.doom_ws.send(JSON.stringify({{
-                            type: 'join', room: '{self.room_code}', id: '{self.player_id}'
-                        }}));
-                    }};
-                    window.doom_ws.onmessage = (e) => window.doom_msg_queue.push(e.data);
-                    window.doom_ws.onclose = () => window.doom_is_ready = false;
+                    if (!window.doom_ws || window.doom_ws.readyState !== 1) {{
+                        if (window.doom_ws) window.doom_ws.close();
+                        window.doom_ws = new WebSocket('{uri}');
+                        window.doom_msg_queue = window.doom_msg_queue || [];
+                        window.doom_is_ready = false;
+                        window.doom_ws.onopen = () => {{ 
+                            window.doom_is_ready = true;
+                            window.doom_ws.send(JSON.stringify({{
+                                type: 'join', room: '{self.room_code}', id: '{self.player_id}'
+                            }}));
+                        }};
+                        window.doom_ws.onmessage = (e) => window.doom_msg_queue.push(e.data);
+                        window.doom_ws.onclose = () => {{ window.doom_is_ready = false; }};
+                    }}
                 """)
 
-                # Espera o rádio ligar
+                # Espera a conexão estabilizar
                 for _ in range(60):
                     if window.eval("window.doom_is_ready"):
                         self.net_status = "CONECTADO"
+                        self.ws = True # Ativa envio no Python
                         break
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)
                 
                 if self.net_status != "CONECTADO":
                     raise Exception("Servidor não atende")
 
-                # Loop de escuta ativo
+                # Loop de escuta ativo e contínuo
                 while window.eval("window.doom_is_ready"):
-                    msgs = window.eval("window.doom_msg_queue")
-                    if msgs and int(msgs.length) > 0:
-                        q_len = int(msgs.length)
+                    # Verifica o tamanho da fila no JS
+                    q_len = int(window.eval("window.doom_msg_queue.length"))
+                    if q_len > 0:
                         for _ in range(q_len):
-                            msg_str = str(window.eval("window.doom_msg_queue.shift()"))
-                            self._process_network_data(json.loads(msg_str))
-                    await asyncio.sleep(0.01) # 100hz de rede
+                            msg_str = window.eval("window.doom_msg_queue.shift()")
+                            if msg_str:
+                                self._process_network_data(json.loads(str(msg_str)))
+                    await asyncio.sleep(0.01) # 100hz de leitura
                     
             except Exception as e:
+                print(f"Erro na Rede: {e}")
                 self.net_status = "ERR: RE-TENTANDO..."
+                self.ws = None
                 await asyncio.sleep(2)
 
 
@@ -719,25 +727,27 @@ class Game:
                 print(f"Novo sinal de jogador: {p_id}")
                 if p_id not in self.other_players:
                     self.other_players[p_id] = {"x": 1.5, "y": 1.5, "ang": 0}
+        elif data["type"] == "player_left":
+            p_id = data.get("id")
+            if p_id in self.other_players:
+                print(f"Jogador saiu: {p_id}")
+                del self.other_players[p_id]
         elif data["type"] == "start":
             print("Partida iniciada pelo Host!")
             self.game_state = "PLAY"
             if self.mouse_look: self._setup_mouse()
 
     def _send_pos(self):
-        """Envia posição atual para o servidor"""
-        if self.ws:
+        """Envia posição atual para o servidor via Bridge JS"""
+        if self.ws and self.room_code:
             try:
+                from platform import window
                 msg = json.dumps({
                     "type": "pos", "room": self.room_code, "id": self.player_id,
-                    "x": self.player.x, "y": self.player.y, "ang": self.player.ang
+                    "x": round(self.player.x, 2), "y": round(self.player.y, 2), "ang": round(self.player.ang, 2)
                 })
-                # No JS (Navegador), send é síncrono
-                import platform
-                if platform.system() == 'Emscripten':
-                    self.ws.send(msg)
-                else:
-                    asyncio.create_task(self.ws.send(msg))
+                # Envia via executando script no navegador
+                window.eval(f"if(window.doom_ws && window.doom_is_ready) window.doom_ws.send('{msg}');")
             except:
                 pass
 
