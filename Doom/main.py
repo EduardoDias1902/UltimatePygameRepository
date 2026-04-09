@@ -828,35 +828,19 @@ class Game:
                 print(f"[NET] Jogador saiu: {p_id}")
                 del self.other_players[p_id]
         elif msg_type == "start":
-            print("[NET] Partida iniciada pelo Host!")
-            host_map = data.get("map_idx", 0)
-            host_level = data.get("level", 1)
+            h_map = data.get("map_idx", 0)
+            h_level = data.get("level", 1)
+            self.net_debug_logs.append(f"START: M{h_map} L{h_level}")
             
-            self.game_state = "PLAY" # Seta estado PLAY primeiro!
-            
-            # Para re-gerar exatamente os mesmos inimigos, nós manipulamos o level e recriamos via _next_level
-            self.level = host_level - 1
-            self.map_idx = host_map
-            self._next_level()
-            self.map_idx = host_map # Previne que next_level altere o map incorretamente
-            
-            self.world = World(self.maps[self.map_idx])
-            # Atualiza texturas baseadas no mapa
-            if self.map_idx == 1:
-                self.tex_wall = self.tex_wall_jungle
-                self.tex_enemy_frames = self.tex_enemy_v2
-                self.tex_boss_frames = self.tex_boss_v2
-                self.tex_floor = self.tex_floor_jungle
-                self.tex_ceiling = self.tex_ceiling_jungle
-            else:
-                self.tex_wall = self.tex_wall_def
-                self.tex_enemy_frames = self.tex_enemy_def
-                self.tex_boss_frames = self.tex_boss_def
-                self.tex_floor = self.tex_floor_def
-                self.tex_ceiling = self.tex_ceiling_def
-                
-            self.level = host_level
-            self.player.x, self.player.y = 1.5, 1.5
+            try:
+                self.game_state = "PLAY"
+                self.level = h_level - 1
+                self.map_idx = h_map
+                self._next_level() # Isso vai setar o level para host_level
+                self.player.x, self.player.y = 1.5, 1.5
+                self.net_debug_logs.append("STATE: PLAY OK")
+            except Exception as e:
+                self.net_debug_logs.append(f"ERR START: {str(e)[:15]}")
         elif msg_type == "hit":
             idx = data.get("idx")
             dmg = data.get("dmg")
@@ -1777,14 +1761,17 @@ class Game:
         self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
 
         # --- WATERMARK ---
-        v_txt = self.font.render("v7.0 SYNC", True, (0, 255, 0))
+        v_txt = self.font.render("v8.0 SYNC", True, (0, 255, 0))
         self.screen.blit(v_txt, (self.W - 120, 20))
         
         # --- NET DEBUG LOGS ---
-        if self.game_state != "PLAY":
-            for i, log in enumerate(self.net_debug_logs):
-                lt = self.font.render(log, True, (0, 255, 255))
-                self.screen.blit(lt, (10, 10 + i * 20))
+        for i, log in enumerate(self.net_debug_logs):
+            lt = self.font.render(log, True, (0, 255, 255))
+            self.screen.blit(lt, (10, 10 + i * 20))
+        
+        # --- STATUS INFO ---
+        st_txt = self.font.render(f"ID:{self.player_id} | STATE:{self.game_state} | WS:{self.ws}", True, (255, 120, 0))
+        self.screen.blit(st_txt, (10, self.H - 60))
 
         # --- OUTROS AVISOS ---
         if self.player_has_key:
