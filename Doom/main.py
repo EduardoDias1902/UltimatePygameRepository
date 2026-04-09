@@ -680,12 +680,11 @@ class Game:
                     self._update(dt)
                     self._render()
                 
-                # Envia posição se em jogo ou Lobby (para descoberta)
+                # Envia posição se em jogo ou Lobby (Otimizado v9.0 - 10Hz)
                 if self.game_state in ("LOBBY", "PLAY") and self.room_code and getattr(self, "ws", False):
                     self.net_timer += dt
-                    # No lobby enviamos mais devagar (0.2s) para não saturar
-                    rate = 0.2 if self.game_state == "LOBBY" else 0.05
-                    if self.net_timer > rate: 
+                    # Reduzido para 10Hz (0.1s) para evitar travamentos em CPUs fracas
+                    if self.net_timer > 0.1: 
                         self.net_timer = 0.0
                         self._send_pos()
 
@@ -877,14 +876,12 @@ class Game:
                 pass
 
     def ws_send(self, data_dict):
-        """Ponte robusta para enviar dados ao JS sem bugs de aspas"""
+        """Ponte robusta v9.0 - JSON Direto para performance"""
         try:
             from platform import window
-            import base64
-            # Codifica em Base64 para evitar QUALQUER problema com aspas ou caracteres especiais no eval()
             msg_json = json.dumps(data_dict)
-            msg_b64 = base64.b64encode(msg_json.encode()).decode()
-            window.eval(f"if(window.doom_ws&&window.doom_is_ready)window.doom_ws.send(atob('{msg_b64}'));")
+            # Evita eval() complexo, usa injeção simples
+            window.eval(f"if(window.doom_ws&&window.doom_is_ready)window.doom_ws.send('{msg_json}');")
         except:
             pass
 
@@ -1761,7 +1758,7 @@ class Game:
         self.screen.blit(ammo_txt, (self.W - 130, self.H - 65))
 
         # --- WATERMARK ---
-        v_txt = self.font.render("v8.0 SYNC", True, (0, 255, 0))
+        v_txt = self.font.render("v9.0 SYNC", True, (0, 255, 0))
         self.screen.blit(v_txt, (self.W - 120, 20))
         
         # --- NET DEBUG LOGS ---
